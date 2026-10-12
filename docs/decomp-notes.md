@@ -46,6 +46,16 @@ before generalizing.
   WinMain init chain (`00447900`, `005f47d0`, `00605b10`) and WndProc `005f3820`.
 - OBJECT_POSITIONS item fields: `[u8 0][u8 class][u32 x][u32 y][u32 z?][u64 ?]`
   (stride 25); class tables at `+0x207a4` (< 0x1e) / `+0x1f01c` (< 0xfb).
+| 0064a5f0 | `ClearRenderTargetView` wrapper (ctx +0xd4) — called from UI paths |
+| 0064a530 | `OMSetRenderTargets` wrapper (ctx +0xc8) |
+| 00652940 | UI rect fill (RGB565-packed color) + clear |
+| 0040ab00 | 2D rect draw workhorse (RGB565→float, many UI callers) |
+| 0064a330 | screenshot capture (CreateTexture2D/GetBuffer/CopyResource/Map/Unmap) |
+| 00624ea0 | **DirectSound init** (`Ordinal_1` = DirectSoundCreate by ordinal,
+  SetCooperativeLevel(PRIORITY) via vtable +0x18, GetCaps +0xc, 0x80 voice
+  slots, log `Sound init fail`) |
+- Present call outstanding (replace with SDL in port; swapchain = `DAT_007c8b14`,
+  device = `…8b8c`, context = `…8b88`, RTV = `…8b90`).
 - Frame-tick callees (`006499e0` render?, `006440b0`, `00640370`, `00652940`,
   `0064c920`, update `0062e230`…) not yet decompiled; Present call not found yet.
 - Renderer-init caller `0064ebb0` not yet decompiled.
