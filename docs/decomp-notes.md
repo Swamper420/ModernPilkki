@@ -56,6 +56,10 @@ before generalizing.
 | 004070e0 | model manager init: calls `.obj` loader, per-texture path build
   (`.pcx` default ext), texture units init |
 | 00401870 | OSND music demuxer (chunked Ogg) |
+| 0043d820 | **GameClient dispatch**: LAN checksum verify (`00463370`), msg id
+  u16 (< 0x48 = 72 handlers at obj+0x5a0), ack-byte dedup @+0x200 |
+| 00463370 / 00446800 | LAN checksum: zero u16@+4, XOR-fold all u16 words
+  (odd trailing byte), compare low16. No capture to verify against yet |
 | 005a0030 | Ogg voice loader |
   SetCooperativeLevel(PRIORITY) via vtable +0x18, GetCaps +0xc, 0x80 voice
   slots, log `Sound init fail`) |
