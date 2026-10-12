@@ -22,7 +22,7 @@ inline uint32_t Hash(const uint8_t *p, size_t n) {
 struct Section {
   std::string tag;
   std::vector<uint8_t> payload;  // OBJECT_POSITIONS: raw span (incl slen/count)
-  uint32_t trailer = 0;          // hash (absent for OBJECT_POSITIONS)
+  uint32_t trailer = 0;          // hash over payload bytes
   bool checked = false;
 };
 
@@ -97,7 +97,8 @@ inline std::vector<Section> Parse(const std::vector<uint8_t> &d) {  static const
   while (d.size() - off > 4) {
     if (d[off] != '<') throw std::runtime_error("expected < at " + std::to_string(off));
     size_t end = off;
-    while (d[end] != '>') end++;
+    while (end < d.size() && d[end] != '>') end++;
+    if (end + 9 > d.size()) throw std::runtime_error("truncated tag");
     std::string tag(d.begin() + off + 1, d.begin() + end);
     Section s;
     s.tag = tag;

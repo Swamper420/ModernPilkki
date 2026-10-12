@@ -1,5 +1,5 @@
 // Smallest assert: synthetic .ves round-trips with original hashes.
-// (Real-lake check lives in tools/ves_hash.py: 768/768.)
+// (Real-lake check lives in tools/ves_hash.py: 816/816.)
 #include <cassert>
 #include <cstdio>
 #include "ves.hpp"
