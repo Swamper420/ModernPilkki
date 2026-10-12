@@ -24,9 +24,12 @@ Reader statuses: 0 = hash OK, 5 = mismatch (data still used, flagged via
 hash instead. Unknown sections skipped by embedded length (`len + 4` —
 skip covers payload + trailer).
 
-OBJECT_POSITIONS payload: `u32 groupcount`, then groups: `u32 nitems` +
-`nitems` × 25-byte records (`u8 0x00 | u8 class | 23 B fields`). Exact-consume
-on 48/48 lakes.
+OBJECT_POSITIONS payload: `u32 ngroups`, then groups: `u32 nitems` +
+`nitems` × 25-byte records (`u8 0x00 | u8 class | u32 a | u32 b | u32 c |
+11 B tail`). Exact-consume 48/48 lakes (`tools/objpos.py`: 290431 items,
+54 classes), C++ port `ves::ParseObjPos` (`src/ves.hpp`).
+Class byte: 0–13 common (< 0x1e: indexed object table), sparse to 130
+(< 0xfb). Field semantics open: a/b huge as u32, c small (~300s).
 Class byte: 0–13 common (< 0x1e: indexed object table), up to 130 (< 0xfb).
 Record fields per `FUN_004b6d70`: `[u8 class][u32 x][u32 y][u32 z?][u64 coords?]` —
 offsets `param_1+0x207a4` (class < 0x1e) and `+0x1f01c` (class < 0xfb) tables.

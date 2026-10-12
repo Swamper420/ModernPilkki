@@ -26,6 +26,52 @@ struct Section {
   bool checked = false;
 };
 
+// OBJECT_POSITIONS record (FUN_004b6d70, tools/objpos.py 48/48 exact).
+// Field semantics open: a/b huge as u32, c small; tail mostly nonzero.
+// ponytail: plain triple + tail bytes until Ghidra pins semantics.
+struct ObjRec {
+  uint8_t cls = 0;
+  uint32_t a = 0, b = 0, c = 0;
+  uint8_t tail[11] = {};
+};
+
+using ObjGroup = std::vector<ObjRec>;
+
+inline uint32_t U32p(const uint8_t *p) {
+  uint32_t v;
+  memcpy(&v, p, 4);
+  return v;
+}
+
+inline std::vector<ObjGroup> ParseObjPos(const uint8_t *p, size_t n) {
+  if (n < 4) throw std::runtime_error("truncated objpos");
+  uint32_t ng = U32p(p);
+  size_t off = 4;
+  std::vector<ObjGroup> out;
+  for (uint32_t g = 0; g < ng; g++) {
+    if (off + 4 > n) throw std::runtime_error("truncated objpos group");
+    uint32_t ni = U32p(p + off);
+    off += 4;
+    if (off + (size_t)ni * 25 > n) throw std::runtime_error("truncated objpos recs");
+    ObjGroup grp;
+    for (uint32_t i = 0; i < ni; i++) {
+      const uint8_t *r = p + off;
+      if (r[0] != 0) throw std::runtime_error("bad objpos record");
+      ObjRec rec;
+      rec.cls = r[1];
+      rec.a = U32p(r + 2);
+      rec.b = U32p(r + 6);
+      rec.c = U32p(r + 10);
+      memcpy(rec.tail, r + 14, 11);
+      grp.push_back(rec);
+      off += 25;
+    }
+    out.push_back(std::move(grp));
+  }
+  if (off != n) throw std::runtime_error("objpos size mismatch");
+  return out;
+}
+
 inline uint32_t U32(const std::vector<uint8_t> &d, size_t o) {
   uint32_t v;
   memcpy(&v, d.data() + o, 4);

@@ -49,6 +49,27 @@ int main() {
     threw = true;
   }
   assert(threw);
+
+  // 4. OBJECT_POSITIONS: 1 group x 2 records round-trips, truncation throws.
+  std::vector<uint8_t> ob;
+  PutU32(ob, 1);  // ngroups
+  PutU32(ob, 2);  // nitems
+  uint8_t r0[25] = {0, 79, 0x11, 0x22, 0x33, 0x44};
+  uint8_t r1[25] = {0, 5};
+  ob.insert(ob.end(), r0, r0 + 25);
+  ob.insert(ob.end(), r1, r1 + 25);
+  auto grps = ves::ParseObjPos(ob.data(), ob.size());
+  assert(grps.size() == 1 && grps[0].size() == 2);
+  assert(grps[0][0].cls == 79 && grps[0][0].a == 0x44332211);
+  assert(grps[0][1].cls == 5 && grps[0][1].c == 0);
+  ob.pop_back();
+  threw = false;
+  try {
+    ves::ParseObjPos(ob.data(), ob.size());
+  } catch (const std::runtime_error &) {
+    threw = true;
+  }
+  assert(threw);
   printf("ves tests pass\n");
   return 0;
 }
