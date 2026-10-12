@@ -24,9 +24,10 @@ Goal: `pilkki` opens window, loads lake, renders scene, plays sound, input works
 
 ## Next
 
-- Walk `00640370` game-mode state machine (7c6908 states) one state at
-  a time; render stages `0064c920` / `00638280`; sprite anim timer
-  (0062e230) once sprite animation lands; new mechanics behind flags
+- Frame-tick stages all decompiled (`docs/decomp-notes.md`); next:
+  `0064ebb0` renderer init + Present call site, `005d86e0` mode query,
+  then sub-state internals of the 7c6904 machine; new mechanics behind
+  flags
 
 Rules: match behavior first, flags for new mechanics, build stays
 `cmake -S src -B build && cmake --build build`, tests per system,

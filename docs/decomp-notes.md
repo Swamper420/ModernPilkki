@@ -43,6 +43,8 @@ Render side:
 | 006499e0 | one-shot latch: `7c696c = 1` (render-enable) |
 | 006440b0 | **letterbox**: bar half-height `(1.0 - local_c) * 0.5`, two white `0040ab00` rect fills + RTV/viewport set (`local_c` = aspect from `0061e400`) |
 | 00640370 | **frame governor + game-mode state machine** (720 lines, see below) |
+| 0064c920 | mirror of `006499e0`: clears the `7c696c` render latch |
+| 00638280 | per-frame text/sprite flush: if `7a6b51` set and `00652bc0()` clear, `0062ead0(cursor x=7c6abc, y=7c6b10)`; ~120 UI callers |
 
 ### 00640370 governor (ported as `tick::Governor`)
 
@@ -51,10 +53,37 @@ Every `>=500ms` window: `fps = (int)(frames * 1000.0 / ms + 0.5)`
 frame: mode 0 none, mode 1 adaptive (`fps>=121` -> sleepMs+1 capped 10;
 `80<=fps<100` -> sleepMs-1 floor 0; `100..120` hold; `fps<80` -> 0),
 mode 2 `Sleep(1)`, mode 3 `Sleep(5)`; mode from vsync probe `0061ec30`,
-limiter flag `7c83bc`, sleep `7c83b4`, fps `7c6958`. Then the big
-`DAT_007c6908` state switch (states 0/1/4/10/0x15/0x31/…) drives game
-flow (`0063f160`, `004c2710`, `FUN_005d86e0` mode query) — not yet
-walked state by state (open).
+limiter flag `7c83bc`, sleep `7c83b4`, fps `7c6958`.
+
+### 00640370 game-mode state machine (walked)
+
+State written to `DAT_007c6904` (pending), switch reads `DAT_007c6908`
+(active; the deferred copy is applied at loop end by `00632560` —
+verify), phase `DAT_007c690c` per state: 0 = enter,
+1 = per-frame, 2 = exit (states run the three blocks in that order each
+pass). Per-frame tail after the switch: `00632560()`, then when phase 1
+`0049e2b0()` (event pump) and if net handle `7c84b8` && `004487b0()`
+-> state `0x31`. Mode/screen query is `FUN_005d86e0`.
+
+| state | meaning |
+|---|---|
+| 0 | boot: sets `7c6904=1`, `7c6898=0` |
+| 1 | `0063f160()` (splash) -> 10 |
+| 4 | session hub: `005d86e0` result chooses next (0x15 -> `7c8790`; default -> 10); net/lobby calls `004383c0/00439ae0`, `00644220/00644530` |
+| 10 (0xa) | **title/menu**: mode 0x10 -> 4 (start session), 0x14 -> `0x31`, 0x15 -> `7c8790` (return from pause); else back to 10 |
+| 11 (0xb) | one-shot: model `006d197c`, loads `gfx\\pic/linja2.pcx` (loading art) |
+| 12 (0xc) | create session object (0x9e8 B via `00435fc0`); load progress `00633e00(...) > 99` -> state `0x14` |
+| 20 (0x14) | **in-game play**: `0063ca80` input, `00638dd0(1, …)`; Esc (0x1b) or back -> `7c8790=0x14`, state 4 (pause); key `0x45c` -> chat path `0045a540/0045c330`; else key -> `0049e320` |
+| 21 (0x15) | alt in-game (replay/net): takes screenshot on enter (`7c878c = 0064a330()`), Esc -> `7c8790=0x15`, state 4; exit frees `7c878c` via `0064d9b0` |
+| 22 (0x16) | teardown (`005b6c20`) -> 10 |
+| 49/50 (0x31/0x32) | net transition: `00632c10/00600b10` -> 0x32 (idle); 0x50 waits |
+| 70 (0x46) / 80 (0x50) | big subsystem states: alloc 0x7ed0 (`0059fd40`) / 0x2d268 (`004c0760`) on enter, free on exit |
+| 100 | idle/quit sink |
+
+Port mapping today (`src/ui.hpp`): Title=10, LakeSelect=11/12, Play=20,
+Pause=4 (via 7c8790), Results=21. No phase protocol in the port yet —
+states are event-flag driven instead (open, revisit when replay/net
+lands).
 
 Constants dumped straight from the PE with `tools/peconst.py` (rdata
 section); faster than decompiler round-trips for float tables.
@@ -118,7 +147,8 @@ manager init (0x100-slot tables, glyph remaps) |
 - Present call outstanding (replace with SDL in port; swapchain = `DAT_007c8b14`,
   device = `…8b8c`, context = `…8b88`, RTV = `…8b90`).
 - Frame-tick callees decompiled (see "Frame-tick stage bodies"); left:
-  `00640370` state-by-state walk, `0064c920`/`00638280`, Present call.
+  `00640370` sub-state internals (0063ca80 input, 00638dd0 UI draw,
+  005d86e0 mode query), Present call.
 - Renderer-init caller `0064ebb0` not yet decompiled.
 - D3D11 error strings (`…FAILED`, `d3d11.dll`) have no imm32 refs — fallback
   path addressing TBD, not important.
