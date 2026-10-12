@@ -88,4 +88,21 @@ viewer `src/objview.cpp` draws all faces with one texture.
 | .pcx | `0A 05` | custom variant, fully decoded (`tools/pcx.py` 348/348, `src/pcx.hpp`): box zeroed, dims obfuscated `xmax=s16(@0x42)+0x80D ymax=s16(@0x46)+0xBFF` (`FUN_00600aa0`, `'['@127` wrapper check), RLE threshold `0xC1` (not standard `0xC0`), planes 1 = paletted, 3 = planar RGB, 4 = interleaved RGBA (`.32.pcx`); loader chain `004070e0→0064d920→0064d260→005fff10→005fefd0→005fb040/005fb7c0/005fc360` |
 | .3ds | `//   Copyright Procyon Products` text header | model-assembly script (NOT raw 3D): `STARTSTRUCTURE` tree of `.obj` parts (`<indent>path p0 p1 p2 p3 index`, indent = depth; 858 parts) + `STARTMOVES` keyframe funcs (`<FUNCTION=id=name>`, `<NEXT=a[,b]>`, `<LENGTH=ms>`, `<DISABLE=…|->`, `<PART=idx=name>` + `(time,x,y,z)` rows, 768 funcs/20498 keys; 12 files use `<IMPORTMOVES>` path instead) + `STARTSHADOWS` obj/shadow pairs (122) — `tools/model3ds.py` + `src/model3ds.hpp` 111/111 exact; open: `STARTSCALING` (6), `STARTLOWRES`/`FORCEADVPOLY` (1 each) |
 | data/*.dat | text (`********`, key/value) | configs |
-| data/botinfo.dat | `plhplkhk…` | obfuscated binary |
+
+## data/botinfo.dat (bot chat script, `FUN_0059b070`)
+
+505 text-mode lines; each line (CR/LF stripped) is an even-length run of
+nibble pairs + trailing checksum pair, decoded by `botinfo::DecodeLine`
+(`src/botinfo.hpp`, verifier `tools/botinfo.py` 505/505 checksum-OK):
+
+    pair0: lo = s[0]-'a', hi = s[1]-'i'; chain key dh = hi<<4|lo
+    mid k: lo = s-'h', hi = s-'c'; byte = ((hi<<4|lo) ^ dh)
+    last:  (((hi<<4|lo) ^ dh)) == (dh^0x11) XOR all bytes, else line rejected
+    (nibbles < 0x10 unsigned, length even and >= 4; game frees buffer on fail)
+
+Decoded: UTF-8 BOM + `******************************`, `* Bot chat
+conversation file *`, `* Peräjärvi CUP *` + bot-name roster, then 31×
+`NEW …` blocks of `NAME:/ID:/FI:/EN:/NEXT:` chat lines (parser also
+accepts `END/DELAY:/RU:/UA:`, unused in this file; loader `FUN_00495da0`
+via fgets `0067c62c` + strtok `" \r\n\t"` `0059f270`).
+| data/botinfo.dat | UTF-8 BOM, `* Bot chat…`, `NEW/NAME:/FI:/EN:/ID:/NEXT:` script | nibble-pair cipher + trailing checksum (`tools/botinfo.py` 505/505, `src/botinfo.hpp`, `FUN_0059b070` — see below) |
