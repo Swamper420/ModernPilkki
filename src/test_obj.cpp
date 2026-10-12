@@ -25,8 +25,21 @@ static std::vector<uint8_t> Make() {
   const char *t = "gfx\\txt\\hum\\HUMSHAD.PCX";
   for (int i = 0; i < 0x32; i++) d.push_back(i < 23 ? t[i] : 0);
   d.insert(d.end(), 0x300, 0);
-  d.insert(d.end(), 12, 0);      // 1 vert
-  d.insert(d.end(), 0x34, 0);    // 1 face
+  PutU32(d, 100);                // vert0 (100,0,200)
+  PutU32(d, 0);
+  PutU32(d, 200);
+  std::vector<uint8_t> face(0x34, 0);
+  auto put = [&](size_t o, uint32_t x) {
+    face[o] = x & 0xFF;
+    face[o + 1] = (x >> 8) & 0xFF;
+    face[o + 2] = (x >> 16) & 0xFF;
+    face[o + 3] = (x >> 24) & 0xFF;
+  };
+  put(0, 0);
+  put(24, 220);
+  put(28, 12);  // uv0 = (220,12)
+  put(48, 1);   // flags
+  d.insert(d.end(), face.begin(), face.end());
   PutU32(d, 0);                  // nf
   PutU32(d, 100);                // footer u32
   d.insert(d.end(), 48, 0);      // 6 x u64
@@ -39,6 +52,10 @@ int main() {
   auto m = obj::Parse(d);
   assert(m.nvert == 1 && m.nface == 1 && m.nt == 1 && m.nf == 0);
   assert(m.tex.size() == 1 && m.tex[0] == "gfx\\txt\\hum\\HUMSHAD.PCX");
+  assert(m.verts.size() == 1 && m.verts[0].x == 100 && m.verts[0].z == 200);
+  assert(m.faces.size() == 1 && m.faces[0].v[0] == 0);
+  assert(m.faces[0].uv[0] == 220 && m.faces[0].uv[1] == 12);
+  assert(m.faces[0].flags == 1);
 
   d.pop_back();
   bool threw = false;

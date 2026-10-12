@@ -22,7 +22,9 @@ def parse(path):
     off += 4
     off += nt * 0x32
     off += 0x300
+    voff = off
     off += nvert * 12
+    foff = off
     off += nface * 0x34
     (nf,) = struct.unpack("<I", d[off : off + 4])
     off += 4 + nf * 12
@@ -34,6 +36,10 @@ def parse(path):
         c0, c1, c2 = struct.unpack("<III", blk[8:20])
         extra = (c0 + c1 + c2) * 0x24
         off += extra
+    # faces: u32 idx[3] + aux[3] + uv[6] pixels + flags; idx must be < nvert
+    for i in range(nface):
+        idx = struct.unpack("<3I", d[foff + i * 0x34 : foff + i * 0x34 + 12])
+        assert all(v < nvert for v in idx), f"face {i} idx OOB in {path}"
     return (nvert, a, nface, nt, nf), off, len(d)
 
 

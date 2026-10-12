@@ -73,11 +73,15 @@ Decoded payloads (meri.ves):
 Dual magic: `Pro Pilkki object\0` (v1) then `Pro Pilkki Object\0` (v2, shipped).
 18 B magic, then: `u32 nvert, u32 ?, u32 nface, u32 ntex`,
 `ntex` × 50 B texture names (`gfx\txt\…\*.PCX`, NUL-terminated),
-`0x300` B block, `nvert` × 12 B (xyz float), `nface` × `0x34` B,
+`0x300` B block, `nvert` × 12 B verts (3×i32 xyz, NOT float),
+`nface` × `0x34` B faces (`u32 idx[3]` + `u32 aux[3]` + `u32 uv[6]`
+pixel coords + `u32 flags`; filler uv on untextured faces),
 `u32 nf`, `nf` × 12 B, footer: `u32` + 6 × `u64` + `0x68` B block
 (counts at +8/+12/+16, each × `0x24` B extra records if block starts `U`).
 Fooler: `fread(field, 2, 4)` = 8 bytes, not 4 — read decomp carefully.
-C++ port `src/obj.hpp` + `src/test_obj.cpp` (843/843 real files match).
+C++ port `src/obj.hpp` + `src/test_obj.cpp` (843/843 real files match,
+all face indices < nvert). Per-face texture select + aux open;
+viewer `src/objview.cpp` draws all faces with one texture.
 | .sfo | `OggS` (2: Tuuli*.sfo) or `OSND` (194) | voice: plain Vorbis ×2, rest OSND-chunked like .mus (`005a0030` voice loader / `00401870` demuxer) |
 | .sfx | `RIFF/WAVE` | plain PCM16 WAV (18/18) |
 | .mus | `OSND\0` + `pmusic` | Ogg pages with magic swapped (`OSND`->`OggS`), `pmusic` for `vorbis`, Ogg CRC32 @22; rebuild verified 199/199 ffmpeg-clean. C++ `audio::OsndToOgg` (`src/audio.hpp` + `src/test_audio.cpp`, `tools/audio.py`) |
