@@ -19,7 +19,13 @@ MSVC + `__security_check_cookie` everywhere.
 | 0064ad60 | **D3D11 renderer init**: tries driver types [1,5,2], feature levels
   11_1→9_1 (retry w/o 11_1 on E_INVALIDARG), logs `Selected D3D_FEATURE_LEVEL_*`
   via `00431970` (log fn), creates swapchain + RTV. Called from `0064ebb0` |
+| 0049e3c0 | key bitmap set/clear (`DAT_007bcd5c`, bit = keycode & 0x1f) |
 | 005f3820 | WndProc: input router + `Reset DX` on display change, save+exit on EndSession |
+
+Input inventory (from imports): keyboard ONLY via WndProc (no GetAsyncKeyState);
+mouse via capture messages; clipboard API; Wiimote detect via HID+SetupDi,
+I/O via ReadFile; serial port (SetCommState/Timeouts — hardware controller?);
+no joystick API; GDI32 nearly unused (DeleteObject/CreateBitmap only).
 | 00431970 | log function (`Game version: v2.0.7`, feature levels, `Resolution change…`) |
 | 00605eb0 | **frame tick** (WinMain loop): timer delta, quit flag (`DAT_007c689c`
   → 2), update `0062e230/00471810/00467e80/00651620/00606bd0/00658570`,

@@ -8,23 +8,25 @@ unless marked conjecture.
 Header: `Pro Pilkki datafile v002\nCopyright Procyon Products\n` + blank line.
 Then sections; file ends with a trailing u32 (file checksum, algo unknown).
 
-Section framing (all except OBJECT_POSITIONS):
+Section framing (ALL sections, uniform — verified byte-exact 48/48):
 
     <TAG> u32-LE len  payload[len]  u32-trailer
 
 Trailer/checksum (reverse-engineered from `FUN_00430770`, verified):
 `H = XOR_j ((byte_j ^ 0x5A) << (j mod 24))` (u32, shifts mod 32).
-`tools/ves_hash.py` matches 768/768 section trailers across 48 lakes.
+`tools/ves_hash.py` matches 816/816 section trailers across 48 lakes.
 File trailer = H(entire file except last 4 bytes) — also verified.
+C++ port: `src/ves.hpp` + `src/test_ves.cpp` (synthetic round-trip +
+corruption check; real-lake check = ves_hash.py).
 Reader statuses: 0 = hash OK, 5 = mismatch (data still used, flagged via
 `local_1300`), 1/2/3/4 = hard fail. Legacy `Pro Pilkki lakefile` format
 (mode 1, `FUN_00430d10` sniff): alternating-`NOT` de-obfuscation + byte-sum
 hash instead. Unknown sections skipped by embedded length (`len + 4` —
 skip covers payload + trailer).
 
-OBJECT_POSITIONS framing: `<OBJECT_POSITIONS> u32 slen u32 groupcount`,
-then groups: `u32 nitems` + `nitems` × 25-byte records
-(`u8 0x00 | u8 class | 23 B fields`). Exact-consume on 48/48 lakes.
+OBJECT_POSITIONS payload: `u32 groupcount`, then groups: `u32 nitems` +
+`nitems` × 25-byte records (`u8 0x00 | u8 class | 23 B fields`). Exact-consume
+on 48/48 lakes.
 Class byte: 0–13 common (< 0x1e: indexed object table), up to 130 (< 0xfb).
 Record fields per `FUN_004b6d70`: `[u8 class][u32 x][u32 y][u32 z?][u64 coords?]` —
 offsets `param_1+0x207a4` (class < 0x1e) and `+0x1f01c` (class < 0xfb) tables.
