@@ -55,6 +55,8 @@ before generalizing.
   `Pro Pilkki Object` (v2); verts/faces/textures/footer (see file-formats) |
 | 004070e0 | model manager init: calls `.obj` loader, per-texture path build
   (`.pcx` default ext), texture units init |
+| 00401870 | OSND music demuxer (chunked Ogg) |
+| 005a0030 | Ogg voice loader |
   SetCooperativeLevel(PRIORITY) via vtable +0x18, GetCaps +0xc, 0x80 voice
   slots, log `Sound init fail`) |
 - Present call outstanding (replace with SDL in port; swapchain = `DAT_007c8b14`,
