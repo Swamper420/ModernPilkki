@@ -31,7 +31,7 @@ def decode(path):
 if __name__ == "__main__":
     bad = n = skipped = 0
     for f in sorted(glob.glob("extracted/gfx/spr/**/*.spr", recursive=True)) + sorted(
-        glob.glob("extracted/gfx/spr/*.SPR")
+        glob.glob("extracted/gfx/spr/**/*.SPR", recursive=True)
     ):
         if open(f, "rb").read(4) != MAGIC:
             skipped += 1
