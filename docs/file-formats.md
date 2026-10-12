@@ -12,13 +12,22 @@ Section framing (all except OBJECT_POSITIONS):
 
     <TAG> u32-LE len  payload[len]  u32-trailer
 
-Trailer algo unknown (not zlib-crc32/adler/FNV over payload or tag+payload —
-`ponytail:` loader decomp will name it; writer can emit 0 until then).
+Trailer/checksum (reverse-engineered from `FUN_00430770`, verified):
+`H = XOR_j ((byte_j ^ 0x5A) << (j mod 24))` (u32, shifts mod 32).
+`tools/ves_hash.py` matches 768/768 section trailers across 48 lakes.
+File trailer = H(entire file except last 4 bytes) — also verified.
+Reader statuses: 0 = hash OK, 5 = mismatch (data still used, flagged via
+`local_1300`), 1/2/3/4 = hard fail. Legacy `Pro Pilkki lakefile` format
+(mode 1, `FUN_00430d10` sniff): alternating-`NOT` de-obfuscation + byte-sum
+hash instead. Unknown sections skipped by embedded length (`len + 4` —
+skip covers payload + trailer).
 
-OBJECT_POSITIONS framing: `<OBJECT_POSITIONS> u32 slen u32 count records…`
-with `DEPTH_TABLE` landing at exactly `slen+8` after the tag end (48/48).
-Record layout unknown (variable-length; meri: count=256 tiny recs,
-Surrinlampi: count=36 ~669 B recs — likely polygons/markers).
+OBJECT_POSITIONS framing: `<OBJECT_POSITIONS> u32 slen u32 groupcount`,
+then groups: `u32 nitems` + `nitems` × 25-byte records
+(`u8 0x00 | u8 class | 23 B fields`). Exact-consume on 48/48 lakes.
+Class byte: 0–13 common (< 0x1e: indexed object table), up to 130 (< 0xfb).
+Record fields per `FUN_004b6d70`: `[u8 class][u32 x][u32 y][u32 z?][u64 coords?]` —
+offsets `param_1+0x207a4` (class < 0x1e) and `+0x1f01c` (class < 0xfb) tables.
 
 Core section order (stable; INFOBLOCK_V2 variant in some lakes):
 
