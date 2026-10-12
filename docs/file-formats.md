@@ -78,6 +78,6 @@ C++ port `src/obj.hpp` + `src/test_obj.cpp` (843/843 real files match).
 | .sfx | `RIFF/WAVE` | plain PCM16 WAV (18/18) |
 | .mus | `OSND\0` + `pmusic` | chunked Ogg transport (`00401870` demuxer), Vorbis inside; same framing as 194 OSND `.sfo`. C++ sniff `src/audio.hpp` + `src/test_audio.cpp` (`tools/audio.py`: 7834 chunks) |
 | .pcx | `0A 05` | custom variant, fully decoded (`tools/pcx.py` 348/348, `src/pcx.hpp`): box zeroed, dims obfuscated `xmax=s16(@0x42)+0x80D ymax=s16(@0x46)+0xBFF` (`FUN_00600aa0`, `'['@127` wrapper check), RLE threshold `0xC1` (not standard `0xC0`), planes 1 = paletted, 3 = planar RGB, 4 = interleaved RGBA (`.32.pcx`); loader chain `004070e0→0064d920→0064d260→005fff10→005fefd0→005fb040/005fb7c0/005fc360` |
-| .3ds | `//   Copyright Procyon Products` text header | custom-wrapped |
+| .3ds | `//   Copyright Procyon Products` text header | model-assembly script (NOT raw 3D): `STARTSTRUCTURE` tree of `.obj` parts (`<indent>path p0 p1 p2 p3 index`, indent = depth; 858 parts) + `STARTMOVES` keyframes (99 files, open) + `STARTSHADOWS` (10, open) — `tools/model3ds.py` + `src/model3ds.hpp` 111/111 exact |
 | data/*.dat | text (`********`, key/value) | configs |
 | data/botinfo.dat | `plhplkhk…` | obfuscated binary |
