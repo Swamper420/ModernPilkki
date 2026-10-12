@@ -78,8 +78,7 @@ inline uint32_t U32(const std::vector<uint8_t> &d, size_t o) {
   return v;
 }
 
-inline std::vector<Section> Parse(const std::vector<uint8_t> &d) {
-  static const char kHdr[] = "Pro Pilkki datafile v002\nCopyright Procyon Products\n";
+inline std::vector<Section> Parse(const std::vector<uint8_t> &d) {  static const char kHdr[] = "Pro Pilkki datafile v002\nCopyright Procyon Products\n";
   const size_t kHl = sizeof(kHdr) - 1;
   if (d.size() < kHl || memcmp(d.data(), kHdr, kHl) != 0)
     throw std::runtime_error("bad ves header");
@@ -106,6 +105,53 @@ inline std::vector<Section> Parse(const std::vector<uint8_t> &d) {
   if (off + 4 != d.size()) throw std::runtime_error("trailing bytes");
   if (Hash(d.data(), off) != ft) throw std::runtime_error("file hash mismatch");
   return out;
+}
+
+// ---- DEPTHMAP/TYPEMAP grids ----
+
+// Payload: `0a 05 01 08` + u32 0 + u16 w + u16 h + u16 200 + u16 200
+// + RLE runs + 768 B palette (256 RGB triplets; gray ramp, or EGA-ish
+// on 16 DEPTHMAPs). Runs: byte < 0xc0 = 1 literal cell; else (count =
+// byte & 0x3f) cells of next byte. Encoder overruns the last run;
+// decode clips to w*h (verified 96/96 maps, exact-consume of cells).
+// Cell semantics open (depth 0..190 vs 17 DEPTH_TABLE thresholds;
+// typemap enum?) and palette use unconfirmed in decomp.
+struct Grid {
+  uint16_t w = 0, h = 0;
+  std::vector<uint8_t> cells;  // w*h
+  std::vector<uint8_t> pal;    // 768 B tail as stored
+};
+
+inline Grid ParseGrid(const std::vector<uint8_t> &p) {
+  static const uint8_t kMagic[4] = {0x0a, 0x05, 0x01, 0x08};
+  if (p.size() < 16 + 768 || memcmp(p.data(), kMagic, 4) != 0)
+    throw std::runtime_error("bad grid header");
+  if (U32(p, 4) != 0 || U32(p, 12) != 0x00c800c8)
+    throw std::runtime_error("bad grid header fields");
+  Grid g;
+  g.w = (uint16_t)(p[8] | (p[9] << 8));
+  g.h = (uint16_t)(p[10] | (p[11] << 8));
+  size_t need = (size_t)g.w * g.h;
+  g.cells.reserve(need);
+  size_t i = 16;
+  while (g.cells.size() < need) {
+    if (i >= p.size() - 768) throw std::runtime_error("truncated grid runs");
+    uint8_t b = p[i];
+    if (b < 0xc0) {
+      g.cells.push_back(b);
+      i += 1;
+    } else {
+      if (i + 1 >= p.size() - 768)
+        throw std::runtime_error("truncated grid run");
+      size_t n = b & 0x3f;
+      // Clip encoder overrun at grid end.
+      if (g.cells.size() + n > need) n = need - g.cells.size();
+      g.cells.insert(g.cells.end(), n, p[i + 1]);
+      i += 2;
+    }
+  }
+  g.pal.assign(p.end() - 768, p.end());
+  return g;
 }
 
 }  // namespace ves

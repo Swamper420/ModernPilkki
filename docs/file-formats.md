@@ -54,7 +54,11 @@ Decoded payloads (meri.ves):
 - STRINGINFO_FI/EN: NUL-separated latin1 strings, `\n` line breaks.
   FI: name, region, description. EN: `No name` placeholder in some lakes.
 - SAVE_COUNTER (8 B): two u32s (counter + ?).
-- DEPTHMAP/TYPEMAP: binary grids (dims in first bytes, RLE-ish).
+- DEPTHMAP/TYPEMAP: `0a 05 01 08` + u32 0 + u16 w,h + u16 200,200 +
+  RLE runs (byte < 0xc0 literal, else `(count=b&0x3f)` of next byte;
+  encoder overruns last run, decode clips) + 768 B palette (256 RGB;
+  gray ramp, or EGA-ish on 16 DEPTHMAPs). 96/96 exact (`tools/ves.py`,
+  `ves::ParseGrid`). Cell/palette use open.
 - VISUAL_MAP / VISUAL_DEPTH: large blobs (compressed image data;
   contain false-positive `<…>` byte runs — scanners must skip by length).
 

@@ -70,6 +70,18 @@ int main() {
     threw = true;
   }
   assert(threw);
+
+  // 5. Grid: literals + run + overrun clip + 768 B palette split.
+  std::vector<uint8_t> gp = {0x0a, 0x05, 0x01, 0x08, 0, 0, 0, 0,
+                             4, 0, 2, 0, 0xc8, 0, 0xc8, 0,
+                             7, 0xc2, 9, 0xc6, 3};  // 1+2+6=9, clip to 8
+  gp.insert(gp.end(), 768, 0x7e);                    // fake palette
+  auto gr = ves::ParseGrid(gp);
+  assert(gr.w == 4 && gr.h == 2 && gr.cells.size() == 8);
+  uint8_t want[8] = {7, 9, 9, 3, 3, 3, 3, 3};  // last run clipped 6->5
+  assert(memcmp(gr.cells.data(), want, 8) == 0);
+  assert(gr.pal.size() == 768 && gr.pal[0] == 0x7e);
+
   printf("ves tests pass\n");
   return 0;
 }
