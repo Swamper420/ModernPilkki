@@ -51,7 +51,10 @@ before generalizing.
 | 00652940 | UI rect fill (RGB565-packed color) + clear |
 | 0040ab00 | 2D rect draw workhorse (RGB565→float, many UI callers) |
 | 0064a330 | screenshot capture (CreateTexture2D/GetBuffer/CopyResource/Map/Unmap) |
-| 00624ea0 | **DirectSound init** (`Ordinal_1` = DirectSoundCreate by ordinal,
+| 0040d320 | **.obj mesh loader**: tries `Pro Pilkki object` (v1) then
+  `Pro Pilkki Object` (v2); verts/faces/textures/footer (see file-formats) |
+| 004070e0 | model manager init: calls `.obj` loader, per-texture path build
+  (`.pcx` default ext), texture units init |
   SetCooperativeLevel(PRIORITY) via vtable +0x18, GetCaps +0xc, 0x80 voice
   slots, log `Sound init fail`) |
 - Present call outstanding (replace with SDL in port; swapchain = `DAT_007c8b14`,

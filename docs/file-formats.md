@@ -58,7 +58,15 @@ Decoded payloads (meri.ves):
 | ext | magic | note |
 |---|---|---|
 | .spr | `01 02 01 00 …` | custom sprite |
-| .obj | `Pro Pilkki Object\0` + texture path (`gfx\txt\…\*.PCX`) | custom model |
+## .obj (mesh, `FUN_0040d320`, `tools/obj.py` 843/843 exact)
+
+Dual magic: `Pro Pilkki object\0` (v1) then `Pro Pilkki Object\0` (v2, shipped).
+18 B magic, then: `u32 nvert, u32 ?, u32 nface, u32 ntex`,
+`ntex` × 50 B texture names (`gfx\txt\…\*.PCX`, NUL-terminated),
+`0x300` B block, `nvert` × 12 B (xyz float), `nface` × `0x34` B,
+`u32 nf`, `nf` × 12 B, footer: `u32` + 6 × `u64` + `0x68` B block
+(counts at +8/+12/+16, each × `0x24` B extra records if block starts `U`).
+Fooler: `fread(field, 2, 4)` = 8 bytes, not 4 — read decomp carefully.
 | .sfo | `OggS` | plain Ogg Vorbis, renamed |
 | .mus | `OSND\0` + `pmusic` | Ogg payload, custom header |
 | .pcx | `0A 05` | standard PCX |
