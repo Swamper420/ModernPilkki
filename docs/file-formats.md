@@ -57,7 +57,10 @@ Decoded payloads (meri.ves):
 
 | ext | magic | note |
 |---|---|---|
-| .spr | `01 02 01 00 …` | custom sprite |
+| .spr (magic `01`, 1094 files) | `u32 0x00010201, u16 w,h, u16 transkey
+  (0xF81F/0xF81B), u16 0, u16 w, u16 0`, then `(u16 RGB565, u8 count)` triplets,
+  `sum(count)==w*h` — `tools/spr.py` exact | data-derived, no Ghidra |
+| .spr (other magics, ~119: fonts/frames) | atlas metadata (rect tables) | open |
 ## .obj (mesh, `FUN_0040d320`, `tools/obj.py` 843/843 exact)
 
 Dual magic: `Pro Pilkki object\0` (v1) then `Pro Pilkki Object\0` (v2, shipped).
