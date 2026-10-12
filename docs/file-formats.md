@@ -73,6 +73,7 @@ Dual magic: `Pro Pilkki object\0` (v1) then `Pro Pilkki Object\0` (v2, shipped).
 `u32 nf`, `nf` × 12 B, footer: `u32` + 6 × `u64` + `0x68` B block
 (counts at +8/+12/+16, each × `0x24` B extra records if block starts `U`).
 Fooler: `fread(field, 2, 4)` = 8 bytes, not 4 — read decomp carefully.
+C++ port `src/obj.hpp` + `src/test_obj.cpp` (843/843 real files match).
 | .sfo | `OggS` | plain Ogg Vorbis, renamed (`005a0030` voice loader) |
 | .sfx | `RIFF/WAVE` | plain PCM16 WAV |
 | .mus | `OSND` | chunked Ogg transport (`00401870` demuxer), Vorbis inside |
