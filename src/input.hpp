@@ -1,7 +1,7 @@
 // Keyboard bitmap (WndProc 005f3820 + FUN_0049e3c0).
 // WM_KEYDOWN/UP wParam -> game key id -> bit in u32 bitmap:
 // 0 VK_UP, 1 VK_DOWN, 2 VK_LEFT, 3 VK_RIGHT, 4 VK_PRIOR, 5 VK_NEXT,
-// 6 VK_RETURN, 7 VK_ESCAPE. Set on down, clear on up.
+// 6 VK_RETURN, 7 VK_ESCAPE, 8 M (mute toggle, port-local).
 // Other keys (F1-F10, End/Home/Ins/Del, PgUp/Dn+arrows) route to the
 // FUN_0049e270 event queue, Shift/Ctrl/Alt set flags 7c6912/13/14 —
 // not ported yet (open).
@@ -40,6 +40,7 @@ inline int SdlToId(SDL_Keycode kc) {
     case SDLK_RETURN:
     case SDLK_KP_ENTER: return 6;
     case SDLK_ESCAPE: return 7;
+    case SDLK_M: return 8;
     default: return -1;
   }
 }

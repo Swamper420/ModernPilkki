@@ -108,3 +108,6 @@ scratch/
 *.bak
 *.orig
 *.rej
+
+# Offline comp catch logs (local only)
+save/

@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <vector>
 #include "audio.hpp"
+#include "audio_play.hpp"
 
 int main() {
   std::vector<uint8_t> wav = {'R', 'I', 'F', 'F', 0, 0, 0, 0,
@@ -58,5 +59,26 @@ int main() {
   assert(threw);
 
   printf("audio tests pass\n");
+
+  // Synth buffers are non-silent (playback fallback when files missing).
+  auto tone = audio::play::Tone(440.0f, 0.1f);
+  assert(!tone.empty() && audio::play::MaxAbs(tone) > 0.01f);
+  auto wind = audio::play::NoiseWind(0.2f);
+  assert(!wind.empty() && audio::play::MaxAbs(wind) > 0.001f);
+  auto jing = audio::play::Jingle({523.25f, 784.0f}, 0.05f);
+  assert(!jing.empty() && jing.size() >= tone.size() - 2 &&
+         jing.size() <= tone.size() + 2 && audio::play::MaxAbs(jing) > 0.01f);
+  // Synthetic S16 mono WAV converts to non-silent F32 mono.
+  {
+    SDL_AudioSpec spec{SDL_AUDIO_S16, 1, 22050};
+    std::vector<uint8_t> raw(200 * 2);
+    for (int i = 0; i < 200; i++) {
+      int16_t s = (int16_t)(30000.0f * sinf(6.2831853f * 440.0f * i / 22050));
+      memcpy(raw.data() + 2 * i, &s, 2);
+    }
+    auto pcm = audio::play::WavToMonoF32(spec, raw.data(), raw.size());
+    assert(pcm.size() == 200 && audio::play::MaxAbs(pcm) > 0.5f);
+  }
+  printf("audio play tests pass\n");
   return 0;
 }
