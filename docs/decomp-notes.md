@@ -66,7 +66,7 @@ before generalizing.
   u16 (< 0x48 = 72 handlers at obj+0x5a0), ack-byte dedup @+0x200 |
 | 00463370 / 00446800 | LAN checksum: zero u16@+4, XOR-fold all u16 words
   (odd trailing byte), compare low16. No capture to verify against yet |
-| 005a0030 | Ogg voice loader |
+| 005a0030 | Ogg voice loader (but 194/196 .sfo are OSND — routing TBD) |
   SetCooperativeLevel(PRIORITY) via vtable +0x18, GetCaps +0xc, 0x80 voice
   slots, log `Sound init fail`) |
 - Present call outstanding (replace with SDL in port; swapchain = `DAT_007c8b14`,

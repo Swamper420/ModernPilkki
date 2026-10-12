@@ -74,10 +74,9 @@ Dual magic: `Pro Pilkki object\0` (v1) then `Pro Pilkki Object\0` (v2, shipped).
 (counts at +8/+12/+16, each × `0x24` B extra records if block starts `U`).
 Fooler: `fread(field, 2, 4)` = 8 bytes, not 4 — read decomp carefully.
 C++ port `src/obj.hpp` + `src/test_obj.cpp` (843/843 real files match).
-| .sfo | `OggS` | plain Ogg Vorbis, renamed (`005a0030` voice loader) |
-| .sfx | `RIFF/WAVE` | plain PCM16 WAV |
-| .mus | `OSND` | chunked Ogg transport (`00401870` demuxer), Vorbis inside |
-| .mus | `OSND\0` + `pmusic` | Ogg payload, custom header |
+| .sfo | `OggS` (2: Tuuli*.sfo) or `OSND` (194) | voice: plain Vorbis ×2, rest OSND-chunked like .mus (`005a0030` voice loader / `00401870` demuxer) |
+| .sfx | `RIFF/WAVE` | plain PCM16 WAV (18/18) |
+| .mus | `OSND\0` + `pmusic` | chunked Ogg transport (`00401870` demuxer), Vorbis inside; same framing as 194 OSND `.sfo`. C++ sniff `src/audio.hpp` + `src/test_audio.cpp` (`tools/audio.py`: 7834 chunks) |
 | .pcx | `0A 05` | standard PCX |
 | .3ds | `//   Copyright Procyon Products` text header | custom-wrapped |
 | data/*.dat | text (`********`, key/value) | configs |

@@ -39,8 +39,8 @@ Failure string: `onnistui, ohjelma suljetaan. (D3D11CreateDeviceAndSwapChain FAI
 | .obj | 843 | `Pro Pilkki Object\0` + texture path (`gfx\txt\hum\HUMSHAD.PCX`) | custom model |
 | .pcx | 348+114 | `0A 05` | standard PCX |
 | .3ds | 111 | `//   Copyright Procyon Products` | custom-wrapped, not raw 3DS (`4D4D`) |
-| .sfo | 196 | `OggS` | plain Ogg Vorbis, renamed |
-| .sfx | 18 | — | check vs .sfo |
+| .sfo | 196 (2 Ogg + 194 OSND) | `OggS` or `OSND\0` | voice: 2 plain Vorbis, rest chunked like .mus |
+| .sfx | 18 | `RIFF/WAVE` | plain PCM16 WAV |
 | .mus | 5 | `OSND\0…pmusic` | Ogg payload, custom header — needs strip/parse |
 | .txt/.rtf | — | docs | release notes (EN/RU/UA) |
 
