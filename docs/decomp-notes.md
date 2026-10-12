@@ -16,6 +16,14 @@ MSVC + `__security_check_cookie` everywhere.
 | 00430d10 | file sniffer: `Pro Pilkki lakefile` → 1, `Pro Pilkki datafile v002` → 2 |
 | 00430ee0 / 00430f30 | section cache writer (`fwrite`) / `free` wrapper |
 | 0066139d | `D3D11CreateDeviceAndSwapChain` IAT thunk |
+| 0064ad60 | **D3D11 renderer init**: tries driver types [1,5,2], feature levels
+  11_1→9_1 (retry w/o 11_1 on E_INVALIDARG), logs `Selected D3D_FEATURE_LEVEL_*`
+  via `00431970` (log fn), creates swapchain + RTV. Called from `0064ebb0` |
+| 005f3820 | WndProc: input router + `Reset DX` on display change, save+exit on EndSession |
+| 00431970 | log function (`Game version: v2.0.7`, feature levels, `Resolution change…`) |
+
+Lesson: Ghidra xref queries can miss callers (thunk showed none); a raw
+`E8`-CALL byte-scan found both call sites (`64ae91`, `64aed5`). Verify.
 
 ## .ves integrity hash (mode 2, cracked, 768/768 verified)
 
@@ -33,5 +41,7 @@ before generalizing.
   WinMain init chain (`00447900`, `005f47d0`, `00605b10`) and WndProc `005f3820`.
 - OBJECT_POSITIONS item fields: `[u8 0][u8 class][u32 x][u32 y][u32 z?][u64 ?]`
   (stride 25); class tables at `+0x207a4` (< 0x1e) / `+0x1f01c` (< 0xfb).
-- Frame `00632640`, WndProc `005f3820` not yet decompiled.
+- Frame `00632640`, renderer-init caller `0064ebb0` not yet decompiled.
+- D3D11 error strings (`…FAILED`, `d3d11.dll`) have no imm32 refs — fallback
+  path addressing TBD, not important.
 - One Ghidra run at a time: parallel runs fail with project LockException.
