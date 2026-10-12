@@ -24,10 +24,9 @@ Goal: `pilkki` opens window, loads lake, renders scene, plays sound, input works
 
 ## Next
 
-- Frame-tick stages all decompiled (`docs/decomp-notes.md`); next:
-  `0064ebb0` renderer init + Present call site, `005d86e0` mode query,
-  then sub-state internals of the 7c6904 machine; new mechanics behind
-  flags
+- Frame-tick stages + Present (`00649810`, vtable slot 8, `Present(1,0)`)
+  + device re-init (`0064ebb0`) all decompiled; next: `005d86e0` mode
+  query + 7c6904 sub-state internals; new mechanics behind flags
 
 Rules: match behavior first, flags for new mechanics, build stays
 `cmake -S src -B build && cmake --build build`, tests per system,

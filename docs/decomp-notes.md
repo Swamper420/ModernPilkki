@@ -45,6 +45,28 @@ Render side:
 | 00640370 | **frame governor + game-mode state machine** (720 lines, see below) |
 | 0064c920 | mirror of `006499e0`: clears the `7c696c` render latch |
 | 00638280 | per-frame text/sprite flush: if `7a6b51` set and `00652bc0()` clear, `0062ead0(cursor x=7c6abc, y=7c6b10)`; ~120 UI callers |
+| 00649810 | **Present**: `context +0x1bc` flush, `swapchain->Present(1,0)`, `7c8b0c++` (governor frame count), mouse-delta snapshot; 0 = device lost -> restore chain |
+| 0064ebb0 | **device/swapchain re-init** (restore path): mode pick (log `Window size selected: %dx%d.`), device `0064ad60` + RTV/DSV `0064c480` + `0064a790`, texture re-upload `0064f150`, clear + viewport; fail -> `0064e380` teardown |
+| 0064c480 | RTV + depth texture + DSV creation, `OMSetRenderTargets` (+0x84) |
+| 0064be00 | texture upload/copy: pow2 sizing (cap 0x200), staging path, DXGI formats 0x56/0x55/0x73/0x57 |
+| 0064cf10 | swapchain `SetPrivateData` (+0xc) with a mode struct; backbuffer Map/Unmap copy path |
+| 0064e380 | device teardown: releases RT/DS views + caches `7c8c14..7c8c28`, `7c8bf4` |
+
+### Frame order in `00605eb0` (verified, incl. Present)
+
+```
+update off (7c6a09) -> return 1 (skip); quit (7c689c) -> return 2
+clock: 7c695c game-time (= 7c6a0c + offset), 7c6a0c frame base
+UPDATE: 62e230(7c695c) 471810(7c6a0c) 467e80(7c6a0c) 651620(7c6a0c)
+        651620(raw ms) 606bd0() 658570()
+[focus lost (652bc0): zero mouse edge latches 7c6910..7c693c]
+render off (7c6a08) -> return 1
+RENDER: 6499e0() latch on, 6440b0(0) letterbox, 640370() governor+states,
+        652940() UI rects, [652bc0 -> 638280(0) flush], 64c920() latch off,
+        649810() Present(1,0)
+        Present fail -> log "Restoring DirectX..", 6325c0, 64f0f0, 632640
+tail: state 7c6908 == 0x32 -> 6062d0 + 431ae0, return 2 (quit)
+```
 
 ### 00640370 governor (ported as `tick::Governor`)
 
@@ -144,12 +166,25 @@ textures, per-frame rects at +0x554); logs `SPRITE SIZE too large…` |
 manager init (0x100-slot tables, glyph remaps) |
   SetCooperativeLevel(PRIORITY) via vtable +0x18, GetCaps +0xc, 0x80 voice
   slots, log `Sound init fail`) |
-- Present call outstanding (replace with SDL in port; swapchain = `DAT_007c8b14`,
-  device = `…8b8c`, context = `…8b88`, RTV = `…8b90`).
+- Present call found: `00649810` = `SwapChain->Present(1, 0)` (vtable slot
+  8, vsync) + `context->Flush`, bumps the governor frame counter
+  `7c8b0c`, snapshots per-frame mouse deltas (`7c8ae8/7c8ae4` ->
+  `7c8aec/7c8af0`); return 0 = device lost -> tick logs
+  `Restoring DirectX..` and runs `006325c0/0064f0f0/00632640`.
+  **Corrected globals** (earlier notes had swapchain/device swapped):
+  device = `DAT_007c8b14`, swapchain = `DAT_007c8b8c`,
+  context = `DAT_007c8b88`, RTV = `DAT_007c8b90`, DSV = `DAT_007c8b9c`.
+  Present is a vtable call, so no IAT thunk exists — byte-scan
+  `FF 5x 20` (`tools/`-side Ghidra script Vt20.java) found it.
+- Renderer-init caller `0064ebb0` decompiled: picks window size mode
+  (logs `Window size selected: %dx%d.`), `UpdateWindow`/`ShowWindow`,
+  `0064ad60` device + `0064c480` RTV/DSV + `0064a790`, re-uploads
+  textures via `0064f150` (Sleep(1) every 10), swapchain private data
+  `0064cf10`, clear color (0.75 grey or scaled), sets viewport, then
+  VSSetConstantBuffers (+0x8c). Failure -> `0064e380` teardown.
 - Frame-tick callees decompiled (see "Frame-tick stage bodies"); left:
   `00640370` sub-state internals (0063ca80 input, 00638dd0 UI draw,
-  005d86e0 mode query), Present call.
-- Renderer-init caller `0064ebb0` not yet decompiled.
+  005d86e0 mode query).
 - D3D11 error strings (`…FAILED`, `d3d11.dll`) have no imm32 refs — fallback
   path addressing TBD, not important.
 - One Ghidra run at a time: parallel runs fail with project LockException.
