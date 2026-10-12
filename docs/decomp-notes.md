@@ -52,6 +52,25 @@ Render side:
 | 0064cf10 | swapchain `SetPrivateData` (+0xc) with a mode struct; backbuffer Map/Unmap copy path |
 | 0064e380 | device teardown: releases RT/DS views + caches `7c8c14..7c8c28`, `7c8bf4` |
 
+## Screen/scene transition driver (006304e0)
+
+Called from the mode query `005d86e0` (set full viewport, flip, return
+screen id `*DAT_007c3f38`) and from entity update `0047f740`. Walks the
+active screen object `param_1[1]` through phases at `+0x30`:
+
+| phase | meaning |
+|---|---|
+| 0 | enter: vtable +0 called once, phase -> 1 |
+| 1 | fade-in: timer "Fade_in" (`00650fe0("Fade_in",0,1000,dur,+0x48,8)`), fade value `+0x48/+0x4c` runs 0..1000 permille, vtable +4 each tick; done -> phase 2 |
+| 2 | frame: vtable +8 every tick |
+| 3 | fade-out: timer "Fade_out" over `+0x38`, vtable +0xc; then vtable +0x10 (exit), next screen = table lookup `0058aaf0(*(obj+0x44))`, phase back to 0 |
+
+`+0x34` = fade-in duration ms, `+0x38` = fade-out duration ms; skips the
+fade when duration is 0. Fades reuse the 00651620 timer/fade system
+(same "Fade_in"/"Fade_out" names). Port has no screen fades yet — map
+here when one is added (`src/ui.hpp` states are flag-driven, not
+phase-driven).
+
 ### Frame order in `00605eb0` (verified, incl. Present)
 
 ```
@@ -182,9 +201,10 @@ manager init (0x100-slot tables, glyph remaps) |
   textures via `0064f150` (Sleep(1) every 10), swapchain private data
   `0064cf10`, clear color (0.75 grey or scaled), sets viewport, then
   VSSetConstantBuffers (+0x8c). Failure -> `0064e380` teardown.
-- Frame-tick callees decompiled (see "Frame-tick stage bodies"); left:
-  `00640370` sub-state internals (0063ca80 input, 00638dd0 UI draw,
-  005d86e0 mode query).
+- Frame-tick callees + mode query + screen driver decompiled (see
+  "Frame-tick stage bodies" / "Screen/scene transition driver"); left:
+  `00640370` sub-state internals (0063ca80 input, 00638dd0 UI draw) and
+  per-screen vtables behind `006304e0`.
 - D3D11 error strings (`…FAILED`, `d3d11.dll`) have no imm32 refs — fallback
   path addressing TBD, not important.
 - One Ghidra run at a time: parallel runs fail with project LockException.

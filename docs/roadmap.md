@@ -25,8 +25,9 @@ Goal: `pilkki` opens window, loads lake, renders scene, plays sound, input works
 ## Next
 
 - Frame-tick stages + Present (`00649810`, vtable slot 8, `Present(1,0)`)
-  + device re-init (`0064ebb0`) all decompiled; next: `005d86e0` mode
-  query + 7c6904 sub-state internals; new mechanics behind flags
+  + device re-init (`0064ebb0`) + screen transition driver (`006304e0`,
+  phase + permille fades) all decompiled; next: 7c6904 sub-state
+  internals + per-screen vtables; new mechanics behind flags
 
 Rules: match behavior first, flags for new mechanics, build stays
 `cmake -S src -B build && cmake --build build`, tests per system,
