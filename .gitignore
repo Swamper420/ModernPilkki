@@ -1,0 +1,110 @@
+# Original game files - never commit binaries (copyrighted + large)
+# original/ holds local copy only; keep hash file tracked, binaries ignored
+original/*.exe
+original/*.msi
+original/*.iso
+extracted/
+assets_original/
+*.dat
+*.pak
+*.wad
+*.mpq
+
+# Decompiler outputs
+*.gpr
+*.gpg
+*.ghidra/
+*.ghidra_lock
+*.i64
+*.idb
+*.id0
+*.id1
+*.nam
+*.til
+*.bndb
+*.bndb-journal
+ghidra_projects/
+ida_projects/
+*.lst
+*.asm.dump
+*.bin.dump
+
+# Build outputs - Linux port
+build/
+build-*/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.o
+*.a
+*.so
+*.so.*
+a.out
+src/generated/
+
+# Windows build leftovers
+Debug/
+Release/
+x64/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.pch
+*.idb
+*.sdf
+*.opensdf
+*.vcxproj.user
+
+# Wine / Proton test prefixes
+*.wineprefix/
+wineprefix/
+pfx/
+*.log.bak
+
+# Traces, captures, dumps
+*.trace
+*.pcap
+*.core
+core.*
+*.dmp
+perf.data*
+callgrind.out.*
+massif.out.*
+*.prof
+
+# Python tooling
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*.code-workspace
+tags
+TAGS
+cscope.*
+
+# Temp / scratch
+/tmp/
+scratch/
+*.tmp
+*.bak
+*.orig
+*.rej
