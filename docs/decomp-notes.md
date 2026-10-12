@@ -22,6 +22,43 @@ MSVC + `__security_check_cookie` everywhere.
 | 0049e3c0 | key bitmap set/clear (`DAT_007bcd5c`, bit = keycode & 0x1f) |
 | 005f3820 | WndProc: input router + `Reset DX` on display change, save+exit on EndSession |
 
+## Frame-tick stage bodies (00605eb0 callees, decompiled)
+
+Update side:
+
+| addr | role |
+|---|---|
+| 0059ae70 | **elapsed** `now-prev`; on wrap `(now-prev)-1` (uint huge, callers clamp). ~100 callers |
+| 0062e230 | sprite **anim timer**: gate `elapsed > 39ms`, CS `7c6978`; per entry `+4` period ms, `+8` accumulator, `+0xc` callback; frame step on obj `+0x128` frame / `+0x138` speed / `+0x134` max / `+0x140` ping-pong (reverses speed at ends) |
+| 00471810 | game **update slicer**: delta -> `<=999ms` slices, slice widens to `5000ms` while remaining `>60000ms`; each slice: entity update `0047f740` (count `+4`) + vtable+8 object update (count `+8`) |
+| 00467e80 | update pass under CS `7c69a8`: per entity `0058ab20(elapsed)` + `00467210(elapsed)` (count `+8`) |
+| 00651620 | timer/fade state machine: state `+0x1a` (0/1/2, else `INVALID TIMER STATE`), rate `+0x28`, double math `elapsed * rate` vs `1.0`; flag `0x10` = chain to next index (rewinds it), modes `5/6` pick slot 1, mode `8` keeps entry |
+| 00606bd0 | **mouse input**: click edges (latch `7c6910/11`, press `7c6934/38/3c`, release `7c6915/16/17`), press/release pos deltas into 10-slot ring `7c6ac0` (index `7c6ab4`), path length `7c69f8 += hypot(dx,dy)`; returns `(elapsed/10)` clamped to 100 |
+| 00658570 | small state machine `+0x890` (0 idle, 1/2 waiting on `00651220`, -> 3/0 on ready + `00651410`), then `00650300(delta)` + `006521c0(1,0)` |
+
+Render side:
+
+| addr | role |
+|---|---|
+| 006499e0 | one-shot latch: `7c696c = 1` (render-enable) |
+| 006440b0 | **letterbox**: bar half-height `(1.0 - local_c) * 0.5`, two white `0040ab00` rect fills + RTV/viewport set (`local_c` = aspect from `0061e400`) |
+| 00640370 | **frame governor + game-mode state machine** (720 lines, see below) |
+
+### 00640370 governor (ported as `tick::Governor`)
+
+Every `>=500ms` window: `fps = (int)(frames * 1000.0 / ms + 0.5)`
+(constants `006d0590`=1000.0, `00777878`=0.5, both doubles). Sleep per
+frame: mode 0 none, mode 1 adaptive (`fps>=121` -> sleepMs+1 capped 10;
+`80<=fps<100` -> sleepMs-1 floor 0; `100..120` hold; `fps<80` -> 0),
+mode 2 `Sleep(1)`, mode 3 `Sleep(5)`; mode from vsync probe `0061ec30`,
+limiter flag `7c83bc`, sleep `7c83b4`, fps `7c6958`. Then the big
+`DAT_007c6908` state switch (states 0/1/4/10/0x15/0x31/…) drives game
+flow (`0063f160`, `004c2710`, `FUN_005d86e0` mode query) — not yet
+walked state by state (open).
+
+Constants dumped straight from the PE with `tools/peconst.py` (rdata
+section); faster than decompiler round-trips for float tables.
+
 Input inventory (from imports): keyboard ONLY via WndProc (no GetAsyncKeyState);
 mouse via capture messages; clipboard API; Wiimote detect via HID+SetupDi,
 I/O via ReadFile; serial port (SetCommState/Timeouts — hardware controller?);
@@ -80,8 +117,8 @@ manager init (0x100-slot tables, glyph remaps) |
   slots, log `Sound init fail`) |
 - Present call outstanding (replace with SDL in port; swapchain = `DAT_007c8b14`,
   device = `…8b8c`, context = `…8b88`, RTV = `…8b90`).
-- Frame-tick callees (`006499e0` render?, `006440b0`, `00640370`, `00652940`,
-  `0064c920`, update `0062e230`…) not yet decompiled; Present call not found yet.
+- Frame-tick callees decompiled (see "Frame-tick stage bodies"); left:
+  `00640370` state-by-state walk, `0064c920`/`00638280`, Present call.
 - Renderer-init caller `0064ebb0` not yet decompiled.
 - D3D11 error strings (`…FAILED`, `d3d11.dll`) have no imm32 refs — fallback
   path addressing TBD, not important.

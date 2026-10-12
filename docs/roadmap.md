@@ -18,11 +18,15 @@ Goal: `pilkki` opens window, loads lake, renders scene, plays sound, input works
 - Lake scene: objpos + class map + depth view (`src/lakeview.cpp`)
 - Playable loop wired into `pilkki` (`src/main.cpp`)
 - botinfo.dat cipher (`src/botinfo.hpp`, 505/505 OK)
+- Frame-tick stage bodies decompiled + timing 1:1 port: `tick::Elapsed`
+  (0059ae70), `tick::Slices` (00471810), `tick::Governor` (00640370
+  adaptive frame limiter), wired into `pilkki`
 
 ## Next
 
-- Verify report pending; then: real update/render stages, audio file
-- playback, new mechanics behind flags
+- Walk `00640370` game-mode state machine (7c6908 states) one state at
+  a time; render stages `0064c920` / `00638280`; sprite anim timer
+  (0062e230) once sprite animation lands; new mechanics behind flags
 
 Rules: match behavior first, flags for new mechanics, build stays
 `cmake -S src -B build && cmake --build build`, tests per system,
