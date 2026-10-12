@@ -25,14 +25,14 @@ hash instead. Unknown sections skipped by embedded length (`len + 4` —
 skip covers payload + trailer).
 
 OBJECT_POSITIONS payload: `u32 ngroups`, then groups: `u32 nitems` +
-`nitems` × 25-byte records (`u8 0x00 | u8 class | u32 a | u32 b | u32 c |
-11 B tail`). Exact-consume 48/48 lakes (`tools/objpos.py`: 290431 items,
+`nitems` × 25-byte records (`u8 flag(0) | u8 class | u16 pad |
+i32 x | i32 y | i32 z | u64 tail`). x/y = 8.24 fixed world units
+(±128, verified 290431/290431 in range); z small int 0..3750; loader
+splits tail u64 into 3×i16. Groups are mixed-class batches (semantics
+open). Exact-consume 48/48 lakes (`tools/objpos.py`: 290431 items,
 54 classes), C++ port `ves::ParseObjPos` (`src/ves.hpp`).
-Class byte: 0–13 common (< 0x1e: indexed object table), sparse to 130
-(< 0xfb). Field semantics open: a/b huge as u32, c small (~300s).
-Class byte: 0–13 common (< 0x1e: indexed object table), up to 130 (< 0xfb).
-Record fields per `FUN_004b6d70`: `[u8 class][u32 x][u32 y][u32 z?][u64 coords?]` —
-offsets `param_1+0x207a4` (class < 0x1e) and `+0x1f01c` (class < 0xfb) tables.
+Class byte: row index into objects.dat NORMAL/SNOW tables (markers
+(000)..(140) confirm; all lake classes < 144, 0 oob in 48/48 scenes).
 
 Core section order (stable; INFOBLOCK_V2 variant in some lakes):
 

@@ -1,8 +1,9 @@
 """Verify OBJECT_POSITIONS payloads (FUN_004b6d70, 48/48 exact-consume).
 
 Payload: u32 ngroups + groups (u32 nitems + nitems x 25B records).
-Record: u8 0x00, u8 class, u32 a, u32 b, u32 c, 11B tail.
-Field semantics open (a/b huge as u32, c small ~300s); exact framing verified.
+Record: u8 flag(0), u8 class, u16 pad, i32 x, i32 y, i32 z, u64 tail.
+x/y = 8.24 fixed world units (+-128); z small int; loader splits tail
+u64 into 3xi16 (low 48 bits). Group semantics open (mixed classes).
 Usage: python3 tools/objpos.py
 """
 import glob
@@ -52,6 +53,10 @@ if __name__ == "__main__":
                         items += len(recs)
                         for r in recs:
                             classes.add(r[1])
+                            _, cls, _, x, y, z = struct.unpack(
+                                "<BBHiii", r[:16])
+                            assert abs(x / 2**24) <= 128.5, f"x {x}"
+                            assert abs(y / 2**24) <= 128.5, f"y {y}"
                 except AssertionError as e:
                     bad += 1
                     print("FAIL", f, e)

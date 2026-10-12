@@ -54,14 +54,17 @@ int main() {
   std::vector<uint8_t> ob;
   PutU32(ob, 1);  // ngroups
   PutU32(ob, 2);  // nitems
-  uint8_t r0[25] = {0, 79, 0x11, 0x22, 0x33, 0x44};
+  // rec0: cls 79, x = 89.0 in 8.24, y = -77*2^24+316 (real meri bytes)
+  uint8_t r0[25] = {0,   79,  0,    0,    0,    0, 0, 0, 0x59,
+                    0x3c, 1,  0,    0xB3, 0,    0, 0, 0, 0};  // rest zero
   uint8_t r1[25] = {0, 5};
   ob.insert(ob.end(), r0, r0 + 25);
   ob.insert(ob.end(), r1, r1 + 25);
   auto grps = ves::ParseObjPos(ob.data(), ob.size());
   assert(grps.size() == 1 && grps[0].size() == 2);
-  assert(grps[0][0].cls == 79 && grps[0][0].a == 0x44332211);
-  assert(grps[0][1].cls == 5 && grps[0][1].c == 0);
+  assert(grps[0][0].cls == 79 && grps[0][0].x == 89 * 16777216);
+  assert(grps[0][0].y == -77 * 16777216 + 316);  // low bits kept raw
+  assert(grps[0][1].cls == 5 && grps[0][1].z == 0);
   ob.pop_back();
   threw = false;
   try {

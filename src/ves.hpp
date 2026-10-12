@@ -27,12 +27,15 @@ struct Section {
 };
 
 // OBJECT_POSITIONS record (FUN_004b6d70, tools/objpos.py 48/48 exact).
-// Field semantics open: a/b huge as u32, c small; tail mostly nonzero.
-// ponytail: plain triple + tail bytes until Ghidra pins semantics.
+// u8 flag(0), u8 class, u16 pad, i32 x/y (8.24 fixed, +-128 world),
+// i32 z (small), u64 tail (loader takes 3xi16 of low 48 bits).
+// ponytail: pad/tail-hi16 raw until decomp pins them.
 struct ObjRec {
   uint8_t cls = 0;
-  uint32_t a = 0, b = 0, c = 0;
-  uint8_t tail[11] = {};
+  uint16_t pad = 0;
+  int32_t x = 0, y = 0, z = 0;
+  int16_t s[3] = {};
+  uint8_t tailhi[2] = {};
 };
 
 using ObjGroup = std::vector<ObjRec>;
@@ -59,10 +62,16 @@ inline std::vector<ObjGroup> ParseObjPos(const uint8_t *p, size_t n) {
       if (r[0] != 0) throw std::runtime_error("bad objpos record");
       ObjRec rec;
       rec.cls = r[1];
-      rec.a = U32p(r + 2);
-      rec.b = U32p(r + 6);
-      rec.c = U32p(r + 10);
-      memcpy(rec.tail, r + 14, 11);
+      memcpy(&rec.pad, r + 2, 2);
+      memcpy(&rec.x, r + 5, 4);
+      memcpy(&rec.y, r + 9, 4);
+      memcpy(&rec.z, r + 13, 4);
+      uint64_t t = 0;
+      memcpy(&t, r + 17, 8);
+      rec.s[0] = (int16_t)t;
+      rec.s[1] = (int16_t)(t >> 16);
+      rec.s[2] = (int16_t)(t >> 32);
+      memcpy(rec.tailhi, r + 23, 2);
       grp.push_back(rec);
       off += 25;
     }
