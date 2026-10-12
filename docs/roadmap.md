@@ -17,10 +17,12 @@ Goal: `pilkki` opens window, loads lake, renders scene, plays sound, input works
 - Frame tick order + clock (`src/tick.hpp`)
 - Lake scene: objpos + class map + depth view (`src/lakeview.cpp`)
 - Playable loop wired into `pilkki` (`src/main.cpp`)
+- botinfo.dat cipher (`src/botinfo.hpp`, 505/505 OK)
 
-## Next (one commit each)
+## Next
 
-1. botinfo.dat cipher (agent on it)
+- Verify report pending; then: real update/render stages, audio file
+- playback, new mechanics behind flags
 
 Rules: match behavior first, flags for new mechanics, build stays
 `cmake -S src -B build && cmake --build build`, tests per system,
