@@ -59,11 +59,8 @@ Decoded payloads (meri.ves):
 
 | ext | magic | note |
 |---|---|---|
-| .spr (magic `01`, 1122 files) | `u32 0x00010201, u16 w,h, u16 transkey
-  (0xF81F/0xF81B), u16 0, u16 w, u16 0`, then `(u16 RGB565, u8 count)` triplets,
-  `sum(count)==w*h` — `tools/spr.py` exact (1122/1122);
-  C++ port `src/spr.hpp` + `src/test_spr.cpp` | data-derived, no Ghidra |
-| .spr (other magics, 91: fonts/frames) | atlas metadata (rect tables) | open |
+| .spr (1212 files) | `u8 nframes, bpp(1/2), enc(0/1/2), flags, u16 w,h,key, u16 0` + `u16[nframes]` ×2 tables, runs `(value:bpp, count:u8)*` (`sum==w*h*nframes`), 256×RGB palette if bpp==1 — `tools/spr.py` + `src/spr.hpp` exact (1212/1212, `FUN_0062f750`) |
+| .spr (frames.spr only) | enc 2 + 53 B extra header, per-frame dims inside | RLE-interleaved, file unreferenced by binary — open |
 ## .obj (mesh, `FUN_0040d320`, `tools/obj.py` 843/843 exact)
 
 Dual magic: `Pro Pilkki object\0` (v1) then `Pro Pilkki Object\0` (v2, shipped).

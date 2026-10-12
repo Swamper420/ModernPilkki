@@ -67,6 +67,15 @@ before generalizing.
 | 00463370 / 00446800 | LAN checksum: zero u16@+4, XOR-fold all u16 words
   (odd trailing byte), compare low16. No capture to verify against yet |
 | 005a0030 | Ogg voice loader (but 194/196 .sfo are OSND — routing TBD) |
+| 0062f750 | **.spr file decoder**: 12 B hdr (`nframes,bpp,enc,flags,w,h,key,eh`),
+extra-hdr, 2×`u16[nframes]` tables, raw (enc 0) / RLE (enc 1, bpp 1 or 2) /
+interleaved (enc 2, frames.spr only), 256×3 B palette if bpp==1, upload via
+`0062e390` when caller arg != 0; `nframes>1` sets anim flag +0x123 |
+| 0062ea00 | sprite buffer alloc (`w*h*nframes*bpp` + tables); `OUT OF MEM!!` |
+| 0062e390 | sprite→texture atlas uploader (splits >200-texture sprites, `SPR3D%d`
+textures, per-frame rects at +0x554); logs `SPRITE SIZE too large…` |
+| 0062fcd0 | 3D font setup from sprite (zero-frame guard); caller `004344b0` = sprite
+manager init (0x100-slot tables, glyph remaps) |
   SetCooperativeLevel(PRIORITY) via vtable +0x18, GetCaps +0xc, 0x80 voice
   slots, log `Sound init fail`) |
 - Present call outstanding (replace with SDL in port; swapchain = `DAT_007c8b14`,

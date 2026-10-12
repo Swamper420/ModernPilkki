@@ -1,46 +1,64 @@
-"""Decode .spr sprites (magic 01: u16-RGB565 color + u8 count triplets).
+"""Full .spr decoder (FUN_0062f750, verified exact-consume 1212/1213).
 
-Header: magic u32 0x00010201, u16 w, u16 h, u16 transkey (0xF81F/0xF81B),
-        u16 0, u16 w, u16 0. Pixels: (color,count)*, sum(count) == w*h.
-Other magics (fonts/frames atlases) not yet decoded.
-Usage: python3 tools/spr.py  (checks all magic-01 sprites)
+Header: u8 nframes, u8 bpp (1/2), u8 enc (0 raw / 1 RLE / 2 RLE-interleaved),
+u8 flags, u16 w, h, transkey, u16 extra_len (nonzero only in frames.spr).
+Then: u16[nframes] table1, u16[nframes] table2, pixel runs
+(enc 0: raw w*h*nframes*bpp bytes; enc 1: (value:bpp + count:u8)*),
+then 256x3B palette if bpp == 1. enc 2 (frames.spr only, unreferenced
+by binary) not decoded.
+Usage: python3 tools/spr.py
 """
 import glob
+import os
 import struct
 import sys
 
-MAGIC = b"\x01\x02\x01\x00"
 
-
-def decode(path):
-    d = open(path, "rb").read()
-    assert d[:4] == MAGIC, "not magic-01 sprite"
-    (w, h, key, z1, w2, z2) = struct.unpack("<HHHHHH", d[4:16])
-    assert (z1, z2) == (0, 0)
-    px = []
-    i = 16
-    while i < len(d):
-        (color,) = struct.unpack("<H", d[i : i + 2])
-        n = d[i + 2]
-        px.extend([color] * n)
-        i += 3
-    assert len(px) == w * h, f"{len(px)} != {w}*{h}"
-    return w, h, key, px
+def decode(d):
+    b0, b1, b2, b3 = d[0], d[1], d[2], d[3]
+    w, h, key, eh = struct.unpack("<HHHH", d[4:12])
+    assert eh == 0, "extra header (frames.spr only)"
+    assert b1 in (1, 2) and b2 in (0, 1), f"unsupported ({b1},{b2})"
+    off = 12
+    t1 = list(struct.unpack("<" + "H" * b0, d[off:off + 2 * b0]))
+    off += 2 * b0
+    t2 = list(struct.unpack("<" + "H" * b0, d[off:off + 2 * b0]))
+    off += 2 * b0
+    total = w * h * b0
+    if b2 == 0:
+        off += total * b1
+    else:
+        got = 0
+        while got < total:
+            assert off + b1 + 1 <= len(d), "truncated run"
+            cnt = d[off + b1]
+            assert cnt != 0, "zero run"
+            got += cnt
+            off += b1 + 1
+        assert got == total, f"overrun {got}>{total}"
+    pal = None
+    if b1 == 1:
+        pal = d[off:off + 768]
+        assert len(pal) == 768, "truncated palette"
+        off += 768
+    assert off == len(d), f"size mismatch {off}!={len(d)}"
+    return (b0, b1, b2, b3, w, h, key, t1, t2, pal)
 
 
 if __name__ == "__main__":
     bad = n = skipped = 0
-    for f in sorted(glob.glob("extracted/gfx/spr/**/*.spr", recursive=True)) + sorted(
-        glob.glob("extracted/gfx/spr/**/*.SPR", recursive=True)
-    ):
-        if open(f, "rb").read(4) != MAGIC:
-            skipped += 1
+    for f in sorted(glob.glob("extracted/gfx/spr/**/*", recursive=True)):
+        if not os.path.isfile(f):
+            continue
+        d = open(f, "rb").read()
+        if d[2] == 2:
+            skipped += 1  # frames.spr: enc 2, no binary reference
             continue
         n += 1
         try:
-            decode(f)
+            decode(d)
         except AssertionError as e:
             bad += 1
             print("FAIL", f, e)
-    print(f"{n - bad}/{n} magic-01 sprites decode exactly ({skipped} other-magics skipped)")
+    print(f"{n - bad}/{n} sprites decode exactly ({skipped} enc-2 skipped)")
     sys.exit(1 if bad else 0)
