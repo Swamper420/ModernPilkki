@@ -14,6 +14,17 @@ struct Rect {
   float x, y, w, h;
 };
 
+// Iteration 5: resources for one indexed layout-B quad draw. Pointers are
+// owned by the caller; Ctx only binds + draws them.
+struct QuadDraw {
+  SDL_GPUGraphicsPipeline *pipe = nullptr;
+  SDL_GPUBuffer *vb = nullptr;
+  SDL_GPUBuffer *ib = nullptr;
+  SDL_GPUTexture *tex = nullptr;
+  SDL_GPUSampler *sampler = nullptr;
+  Uint32 indices = 0;
+};
+
 // Aspect-preserving, centered viewport inside a winW x winH target.
 // Degenerate inputs collapse to an empty rect.
 inline Rect Letterbox(int winW, int winH, float aspect) {
@@ -97,8 +108,9 @@ struct Ctx {
   }
 
   // Clear + letterbox viewport, then submit. If `tri` is set, one hardcoded
-  // triangle is drawn inside the viewport (iteration 4 GPU smoke test).
-  void EndFrame(SDL_GPUGraphicsPipeline *tri = nullptr) {
+  // triangle is drawn; if `quad` is set, one indexed layout-B textured quad.
+  void EndFrame(SDL_GPUGraphicsPipeline *tri = nullptr,
+                const QuadDraw *quad = nullptr) {
     if (!cmd) return;
     float g = ClearGrey();
     SDL_GPUColorTargetInfo ct{};
@@ -114,10 +126,24 @@ struct Ctx {
       SDL_BindGPUGraphicsPipeline(rp, tri);
       SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
     }
+    if (quad && quad->pipe) {
+      SDL_BindGPUGraphicsPipeline(rp, quad->pipe);
+      SDL_GPUBufferBinding vb{quad->vb, 0}, ib{quad->ib, 0};
+      SDL_BindGPUVertexBuffers(rp, 0, &vb, 1);
+      SDL_BindGPUIndexBuffer(rp, &ib, SDL_GPU_INDEXELEMENTSIZE_16BIT);
+      SDL_GPUTextureSamplerBinding ts{quad->tex, quad->sampler};
+      SDL_BindGPUFragmentSamplers(rp, 0, &ts, 1);
+      SDL_DrawGPUIndexedPrimitives(rp, quad->indices, 1, 0, 0, 0);
+    }
     SDL_EndGPURenderPass(rp);
     SDL_SubmitGPUCommandBuffer(cmd);
     cmd = nullptr;
     swap = nullptr;
+  }
+
+  // Push a vertex uniform block (CB slot 0) for the current command buffer.
+  void PushVertexUniform(const void *data, Uint32 size, Uint32 slot = 0) {
+    if (cmd) SDL_PushGPUVertexUniformData(cmd, slot, data, size);
   }
 };
 

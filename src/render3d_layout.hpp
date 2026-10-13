@@ -159,4 +159,25 @@ inline VertexB MakeTerrainVertex(int x, int y, float u, float v, float depth,
   return VertexB{(float)x, (float)y, u, v, depth, alpha};
 }
 
+// --- layout-B quad (it5 scaffold) ---
+// 4 pixel-space verts + a 4-index triangle strip, sized to 0064b350's fixed
+// 0x60 VB / 0x8 IB (the "2D/terrain quad" vocab: 00648f60 / 00649a30).
+// NOT the original fixed-buffer init data (still open, docs/render.md 13) --
+// a stand-in so the layout-B indexed draw path can be exercised. quad.vert
+// maps pixel space (x right, y down) to NDC via the pushed viewport uniform.
+struct QuadVerts {
+  VertexB v[4];
+  uint16_t idx[4];
+};
+static_assert(sizeof(QuadVerts::v) == kFixedQuadVbBytes, "quad VB = 0x60");
+static_assert(sizeof(QuadVerts::idx) == kFixedQuadIbBytes, "quad IB = 0x8");
+
+inline QuadVerts MakeQuad(float x, float y, float w, float h) {
+  return {{{x, y, 0.f, 0.f, 0.5f, 1.f},
+           {x + w, y, 1.f, 0.f, 0.5f, 1.f},
+           {x, y + h, 0.f, 1.f, 0.5f, 1.f},
+           {x + w, y + h, 1.f, 1.f, 0.5f, 1.f}},
+          {0, 1, 2, 3}};
+}
+
 }  // namespace render3d

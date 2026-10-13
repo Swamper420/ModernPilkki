@@ -35,7 +35,23 @@ static void testShaderArtifacts() {
   assert(n >= 20);
   assert(readMagic(RENDER3D_FRAG_SPV, m, n) && m == kSpirvMagic);
   assert(n >= 20);
+  assert(readMagic(RENDER3D_QUAD_VERT_SPV, m, n) && m == kSpirvMagic);
+  assert(n >= 20);
+  assert(readMagic(RENDER3D_QUAD_FRAG_SPV, m, n) && m == kSpirvMagic);
+  assert(n >= 20);
 #endif
+}
+
+// Iteration 5: layout-B quad packing -- 4 verts + a 4-index triangle strip,
+// matching the fixed 0064b350 buffer sizes and the 00649a30 strip topology.
+static void testQuad() {
+  using namespace render3d;
+  QuadVerts q = MakeQuad(10, 20, 200, 100);
+  assert(q.v[0].x == 10.f && q.v[0].y == 20.f && q.v[0].u == 0.f && q.v[0].v == 0.f);
+  assert(q.v[3].x == 210.f && q.v[3].y == 120.f && q.v[3].u == 1.f && q.v[3].v == 1.f);
+  assert(q.v[0].depth == 0.5f && q.v[0].alpha == 1.f);
+  assert(q.idx[0] == 0 && q.idx[1] == 1 && q.idx[2] == 2 && q.idx[3] == 3);
+  assert(sizeof q.v == kFixedQuadVbBytes && sizeof q.idx == kFixedQuadIbBytes);
 }
 
 static bool eq(float a, float b) { return fabsf(a - b) < 1e-4f; }
@@ -221,6 +237,7 @@ int main() {
   testMatrixMath();
   testLayouts();
   testShaderArtifacts();
+  testQuad();
 
   printf("render3d tests pass\n");
   return 0;

@@ -78,6 +78,8 @@ if(GLSL_COMPILER)
   set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
   set(RENDER3D_VERT_SPV ${CMAKE_CURRENT_BINARY_DIR}/triangle.vert.spv)
   set(RENDER3D_FRAG_SPV ${CMAKE_CURRENT_BINARY_DIR}/triangle.frag.spv)
+  set(RENDER3D_QUAD_VERT_SPV ${CMAKE_CURRENT_BINARY_DIR}/quad.vert.spv)
+  set(RENDER3D_QUAD_FRAG_SPV ${CMAKE_CURRENT_BINARY_DIR}/quad.frag.spv)
   add_custom_command(
     OUTPUT ${RENDER3D_VERT_SPV}
     COMMAND ${GLSL_COMPILER} -fshader-stage=vert ${SHADER_SRC_DIR}/triangle.vert
@@ -90,12 +92,28 @@ if(GLSL_COMPILER)
             -o ${RENDER3D_FRAG_SPV}
     DEPENDS ${SHADER_SRC_DIR}/triangle.frag
     COMMENT "glslc triangle.frag")
+  add_custom_command(
+    OUTPUT ${RENDER3D_QUAD_VERT_SPV}
+    COMMAND ${GLSL_COMPILER} -fshader-stage=vert ${SHADER_SRC_DIR}/quad.vert
+            -o ${RENDER3D_QUAD_VERT_SPV}
+    DEPENDS ${SHADER_SRC_DIR}/quad.vert
+    COMMENT "glslc quad.vert")
+  add_custom_command(
+    OUTPUT ${RENDER3D_QUAD_FRAG_SPV}
+    COMMAND ${GLSL_COMPILER} -fshader-stage=frag ${SHADER_SRC_DIR}/quad.frag
+            -o ${RENDER3D_QUAD_FRAG_SPV}
+    DEPENDS ${SHADER_SRC_DIR}/quad.frag
+    COMMENT "glslc quad.frag")
   add_custom_target(render3d_shaders DEPENDS ${RENDER3D_VERT_SPV}
-                                             ${RENDER3D_FRAG_SPV})
+                                             ${RENDER3D_FRAG_SPV}
+                                             ${RENDER3D_QUAD_VERT_SPV}
+                                             ${RENDER3D_QUAD_FRAG_SPV})
   foreach(tgt render3d_view test_render3d)
     target_compile_definitions(${tgt} PRIVATE
       RENDER3D_VERT_SPV="${RENDER3D_VERT_SPV}"
-      RENDER3D_FRAG_SPV="${RENDER3D_FRAG_SPV}")
+      RENDER3D_FRAG_SPV="${RENDER3D_FRAG_SPV}"
+      RENDER3D_QUAD_VERT_SPV="${RENDER3D_QUAD_VERT_SPV}"
+      RENDER3D_QUAD_FRAG_SPV="${RENDER3D_QUAD_FRAG_SPV}")
     add_dependencies(${tgt} render3d_shaders)
   endforeach()
 else()
