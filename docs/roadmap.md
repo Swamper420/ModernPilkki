@@ -82,7 +82,7 @@ Port as NEW files (`src/render3d.*` + viewer + tests) first, wire into
 | 1 | `45a7cf4` | `src/render3d.hpp` SDL_GPU device/swapchain + `render3d_view` + letterbox/clear math; `test_render3d` |
 | 2 | `498d1d8` | `src/render3d_math.hpp` 1:1 4x4 math (`00598dc0/00598860/00598460/00599d40/00650380`); corrected docs (00599d40 args are rotation, not scale) |
 | 3 | `9af269f` | `src/render3d_layout.hpp` 6 input layouts (`0064b560`), CB table (`0064a790`), fixed buffers (`0064b350`), terrain append (`006487f0`) |
-| 4 | `d6338cc` | shader build (`glslc` -> SPIR-V via CMake, `src/shaders/*.vert\|frag`) + first graphics pipeline: one hardcoded triangle (`src/render3d_pipeline.hpp`), drawn in the `render3d_view` letterbox; SPIR-V artifact assert in `test_render3d` |
+| 4 | `ae941ac` | shader build (`glslc` -> SPIR-V via CMake, `src/shaders/*.vert\|frag`) + first graphics pipeline: one hardcoded triangle (`src/render3d_pipeline.hpp`), drawn in the `render3d_view` letterbox; SPIR-V artifact assert in `test_render3d` |
 | 5 (next) | - | layout-B quad + mesh A + textures, terrain gen, camera/CB0, wire into `main.cpp` |
 
 Shaders are re-authored GLSL (clean-room); no DXBC shipped. `glslc`
