@@ -55,18 +55,19 @@ struct SceneCam {
 };
 
 // D3D-style row-vector camera matrices, in the port's convention (v' = v * M,
-// clip z in 0..1, NDC y-up -- verified against the rendered terrain, which
-// appears below the horizon line).
+// clip z in 0..1, NDC y-up). RH basis: x = z x up, y = x x z, so looking down
+// -z (north) puts world +x (east) on screen right -- matching the 2D map.
+// (The first cut had x = up x z, which mirrored the world and movement.)
 inline Mat4 LookAt(const SceneCam& c) {
   float zx = c.tx - c.ex, zy = c.ty - c.ey, zz = c.tz - c.ez;
   float zl = sqrtf(zx * zx + zy * zy + zz * zz);
   if (zl > 0) { zx /= zl; zy /= zl; zz /= zl; }
-  // x = up x z, up = (0,1,0)
-  float xx = 1 * zz - 0 * zy, xy = 0 * zx - 0 * zz, xz = 0 * zy - 1 * zx;
+  // x = z x up, up = (0,1,0)
+  float xx = zy * 0 - zz * 1, xy = zz * 0 - zx * 0, xz = zx * 1 - zy * 0;
   float xl = sqrtf(xx * xx + xy * xy + xz * xz);
   if (xl > 0) { xx /= xl; xy /= xl; xz /= xl; }
-  // y = z x x
-  float yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+  // y = x x z
+  float yx = xy * zz - xz * zy, yy = xz * zx - xx * zz, yz = xx * zy - xy * zx;
   return Mat4{{xx, yx, zx, 0,
                xy, yy, zy, 0,
                xz, yz, zz, 0,

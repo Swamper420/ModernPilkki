@@ -379,6 +379,8 @@ static void testScene() {
   assert(o[2] / o[3] > 0.f && o[2] / o[3] < 1.f);  // in the depth range
   xf(0, 5, 0, o);  // world +y is up -> clip y positive (NDC y-up)
   assert(o[1] / o[3] > 0.f);
+  xf(5, 0, 0, o);  // looking -z: world +x is screen right (was mirrored)
+  assert(o[0] / o[3] > 0.f);
 }
 
 // Iteration 10: lake objects (objpos) baked into world-space layout-A meshes.
