@@ -63,9 +63,13 @@ inline std::vector<VertexA> BuildMeshA(const obj::Model& m, float texW,
     const obj::Vert& a = m.verts[f.v[0]];
     const obj::Vert& b = m.verts[f.v[1]];
     const obj::Vert& d = m.verts[f.v[2]];
-    const float e1[3] = {(float)(b.x - a.x), (float)(b.y - a.y),
+    // P2 .obj is y-DOWN with the origin at the model's base (verified on
+    // nature/manty3.obj y[-500,0], buildings/koppi.obj floor at y=0,
+    // cars/car1.obj roof at y=-257): world up = -model y, so edges and
+    // positions are mirrored in y here (normals follow the mirrored edges).
+    const float e1[3] = {(float)(b.x - a.x), -(float)(b.y - a.y),
                          (float)(b.z - a.z)};
-    const float e2[3] = {(float)(d.x - a.x), (float)(d.y - a.y),
+    const float e2[3] = {(float)(d.x - a.x), -(float)(d.y - a.y),
                          (float)(d.z - a.z)};
     float n[3] = {e1[1] * e2[2] - e1[2] * e2[1],
                   e1[2] * e2[0] - e1[0] * e2[2],
@@ -81,11 +85,16 @@ inline std::vector<VertexA> BuildMeshA(const obj::Model& m, float texW,
       n[1] = 0;
       n[2] = 1;
     }
+    // The y mirror reverses winding, so the edge cross points inward: negate
+    // to keep the normal outward (shading uses |dot|, but stay correct).
+    n[0] = -n[0];
+    n[1] = -n[1];
+    n[2] = -n[2];
     const obj::Vert* tri[3] = {&a, &b, &d};
     for (int k = 0; k < 3; ++k) {
       VertexA va{};
       va.px = ((float)tri[k]->x - c[0]) * inv;
-      va.py = ((float)tri[k]->y - c[1]) * inv;
+      va.py = -((float)tri[k]->y - c[1]) * inv;  // y-down model -> y-up world
       va.pz = ((float)tri[k]->z - c[2]) * inv;
       va.nx = n[0];
       va.ny = n[1];

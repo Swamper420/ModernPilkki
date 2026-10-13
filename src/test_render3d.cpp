@@ -64,11 +64,13 @@ static void testMeshA() {
   mo.faces = {f};
   auto va = render3d::BuildMeshA(mo, 8.f, 8.f);
   assert(va.size() == 3);
-  // x span 10 -> inv 1/10, centered at (5,5,0).
-  assert(std::fabs(va[0].px + 0.5f) < 1e-5f && std::fabs(va[0].py + 0.5f) < 1e-5f);
-  assert(std::fabs(va[1].px - 0.5f) < 1e-5f && std::fabs(va[1].py + 0.5f) < 1e-5f);
-  assert(std::fabs(va[2].px + 0.5f) < 1e-5f && std::fabs(va[2].py - 0.5f) < 1e-5f);
-  // Face normal = +Z; flat-shaded (all 3 identical).
+  // x span 10 -> inv 1/10, centered at (5,5,0). P2 .obj is y-down, so model
+  // y=10 maps to world -0.5 (below) and y=0 to +0.5: up = -model y.
+  assert(std::fabs(va[0].px + 0.5f) < 1e-5f && std::fabs(va[0].py - 0.5f) < 1e-5f);
+  assert(std::fabs(va[1].px - 0.5f) < 1e-5f && std::fabs(va[1].py - 0.5f) < 1e-5f);
+  assert(std::fabs(va[2].px + 0.5f) < 1e-5f && std::fabs(va[2].py + 0.5f) < 1e-5f);
+  assert(va[0].py > va[2].py);  // model y=0 (base) above model y=10
+  // Face normal = +Z; flat-shaded (all 3 identical), outward despite the mirror.
   assert(std::fabs(va[0].nz - 1.f) < 1e-5f && std::fabs(va[1].nz - 1.f) < 1e-5f);
   // UV: pixel coords / 8.
   assert(std::fabs(va[0].u) < 1e-6f && std::fabs(va[0].v) < 1e-6f);
