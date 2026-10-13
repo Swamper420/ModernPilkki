@@ -25,9 +25,12 @@ int main() {
   offline::Comp comp;
   std::vector<std::string> five(names.begin(), names.end());
   while (five.size() < 5) five.push_back("Bot" + std::to_string(five.size()));
-  comp.Init(five, chat, 5, 600, 7);
+  // A bot's first catching cycle is >= its initial AI_ei_syo wait (~600-1200
+  // ticks) plus one bore (120-714 ticks), so 600 ticks is too short to observe
+  // a catch; give the run room (6000 ticks ~= 100 s at 60 fps).
+  comp.Init(five, chat, 5, 6000, 7);
   assert(comp.bots.size() == 5);
-  for (int i = 0; i < 600; i++) comp.Tick();  // no crash, bots catch
+  for (int i = 0; i < 6000; i++) comp.Tick();  // no crash, bots catch
   int total = 0;
   for (auto &b : comp.bots) {
     total += b.count;

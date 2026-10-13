@@ -75,6 +75,29 @@ CB0 layout, `004a5d00` this identity, `0064b350` fixed-buffer init.
 Port as NEW files (`src/render3d.*` + viewer + tests) first, wire into
 `main.cpp` last.
 
+### Port iterations (small, committed)
+
+| it | commit | what |
+|---|---|---|
+| 1 | `45a7cf4` | `src/render3d.hpp` SDL_GPU device/swapchain + `render3d_view` + letterbox/clear math; `test_render3d` |
+| 2 | `498d1d8` | `src/render3d_math.hpp` 1:1 4x4 math (`00598dc0/00598860/00598460/00599d40/00650380`); corrected docs (00599d40 args are rotation, not scale) |
+| 3 | `9af269f` | `src/render3d_layout.hpp` 6 input layouts (`0064b560`), CB table (`0064a790`), fixed buffers (`0064b350`), terrain append (`006487f0`) |
+| 4 (next) | - | shader build (`glslc` -> SPIR-V, already installed) + one hardcoded-triangle pipeline; then layout-B quad, mesh A + textures, terrain gen, camera/CB0, wire into `main.cpp` |
+
+Shaders are re-authored GLSL (clean-room); no DXBC shipped. `glslc`
+present in this env; CMake targets skip the GPU/exe gracefully if absent.
+
+### Known issues (pre-existing, unrelated to the 3D work)
+
+- The repo `build/` is configured `Release` (`-DNDEBUG`) so **all `assert`
+  tests are compiled out** and "pass" vacuously. An assert-on build
+  (no `CMAKE_BUILD_TYPE`) exposes: `test_game` fails at the walk test —
+  `game::Click` rejects an out-of-bounds target (`Walkable` max
+  `(w-1)*600`), but the test expects a walk that stops at that wall
+  (docs/sim.md delta 3 walk grid, still open). Fix `004b0bb0`/`00495930`
+  first, then re-point the test. `test_bots` fixed (`6000` ticks; a bot's
+  first catch needs >= ~720 ticks, `600` could never observe one).
+
 Rules: match behavior first, flags for new mechanics, build stays
 `cmake -S src -B build && cmake --build build`, tests per system,
 never commit binaries/extracted/Ghidra blobs.
