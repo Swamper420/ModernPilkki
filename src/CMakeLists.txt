@@ -79,6 +79,8 @@ target_include_directories(render3d_view PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(render3d_view PRIVATE SDL3::SDL3)
 add_executable(test_render3d test_render3d.cpp)
 target_include_directories(test_render3d PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_executable(test_controller test_controller.cpp)
+target_include_directories(test_controller PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(test_render3d PRIVATE SDL3::SDL3)
 
 # Iteration 4: re-authored GLSL -> SPIR-V via glslc (clean-room; no DXBC is
