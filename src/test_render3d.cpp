@@ -336,10 +336,11 @@ static void testScene() {
   g.pal.resize(768, 0);
   auto m = BuildTerrainMesh(g, 20.f);
   assert(m.size() == 2u * 2u * 6u);
-  // Center vertex (the 255 cell) rises by ~1.0*20.
-  float maxY = 0.f;
-  for (auto& v : m) if (v.py > maxY) maxY = v.py;
-  assert(maxY > 15.f && maxY <= 20.001f);
+  // The center (255) cell dips by ~1.0*20; corners stay at y=0.
+  float minY = 0.f, maxY = 0.f;
+  for (auto& v : m) { if (v.py < minY) minY = v.py; if (v.py > maxY) maxY = v.py; }
+  assert(minY < -15.f && minY >= -20.001f);
+  assert(maxY == 0.f);
   // World x/z span +-128.
   float minX = 1e9f, maxX = -1e9f;
   for (auto& v : m) { if (v.px < minX) minX = v.px; if (v.px > maxX) maxX = v.px; }
@@ -372,8 +373,8 @@ static void testScene() {
   assert(fabsf(o[0]) < 1e-4f);
   assert(fabsf(o[1]) < 1e-4f);
   assert(o[2] / o[3] > 0.f && o[2] / o[3] < 1.f);  // in the depth range
-  xf(0, 5, 0, o);  // world +y is up -> clip y negative (Vulkan y-down)
-  assert(o[1] / o[3] < 0.f);
+  xf(0, 5, 0, o);  // world +y is up -> clip y positive (NDC y-up)
+  assert(o[1] / o[3] > 0.f);
 }
 
 int main() {

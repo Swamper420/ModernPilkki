@@ -453,9 +453,9 @@ int main(int argc, char **argv) {
         // Third-person camera over the local player (port coords -> world).
         float pxw = fish.PortX(fish.x), pyw = fish.PortY(fish.y);
         render3d::SceneCam sc;
-        sc.ex = pxw; sc.ey = 48.f; sc.ez = pyw + 70.f;
-        sc.tx = pxw; sc.ty = 4.f; sc.tz = pyw - 15.f;
-        sc.fovDeg = 60.f; sc.nearZ = 1.f; sc.farZ = 600.f;
+        sc.ex = pxw; sc.ey = 95.f; sc.ez = pyw + 85.f;
+        sc.tx = pxw; sc.ty = -4.f; sc.tz = pyw - 15.f;
+        sc.fovDeg = 60.f; sc.nearZ = 1.f; sc.farZ = 700.f;
         bridge.RenderFrame(sc);
         SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
         SDL_RenderClear(r);

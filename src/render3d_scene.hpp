@@ -39,9 +39,9 @@ struct SceneCam {
   float fovDeg = 55.f, nearZ = 1.f, farZ = 400.f;
 };
 
-// D3D/Vulkan-style row-vector camera matrices, in the port's convention
-// (v' = v * M, clip z in 0..1). SDL_GPU/Vulkan NDC is y-down, so the perspective
-// y scale is negated to keep +world-y up on screen.
+// D3D-style row-vector camera matrices, in the port's convention (v' = v * M,
+// clip z in 0..1, NDC y-up -- verified against the rendered terrain, which
+// appears below the horizon line).
 inline Mat4 LookAt(const SceneCam& c) {
   float zx = c.tx - c.ex, zy = c.ty - c.ey, zz = c.tz - c.ez;
   float zl = sqrtf(zx * zx + zy * zy + zz * zz);
@@ -63,9 +63,8 @@ inline Mat4 LookAt(const SceneCam& c) {
 inline Mat4 Perspective(float fovDeg, float aspect, float nearZ, float farZ) {
   const float h = 1.f / tanf(fovDeg * (float)M_PI / 360.f);
   const float w = h / (aspect > 0 ? aspect : 1.f);
-  const float yy = -h;  // Vulkan NDC y-down
   return Mat4{{w, 0, 0, 0,
-               0, yy, 0, 0,
+               0, h, 0, 0,
                0, 0, farZ / (farZ - nearZ), 1,
                0, 0, -nearZ * farZ / (farZ - nearZ), 0}};
 }
@@ -76,9 +75,10 @@ inline Mat4 ViewProj(const SceneCam& c, float aspect) {
 }
 
 // Layout-A terrain mesh: world positions, finite-difference normals, uv = grid
-// coords normalised. `zScale` scales the 0..1 depth fraction to world units.
+// coords normalised. `zScale` scales the 0..1 depth fraction to world units; the
+// bed sits BELOW y=0 (deep cells are lower), so the lake reads as a basin.
 inline std::vector<VertexA> BuildTerrainMesh(const ves::Grid& depth,
-                                             float zScale = 26.f) {
+                                             float zScale = 12.f) {
   std::vector<VertexA> out;
   const int w = depth.w, h = depth.h;
   if (w < 2 || h < 2 || (int)depth.cells.size() < w * h) return out;
@@ -94,10 +94,10 @@ inline std::vector<VertexA> BuildTerrainMesh(const ves::Grid& depth,
     VertexA v{};
     v.px = (float)x * invW - 128.f;
     v.pz = (float)y * invH - 128.f;
-    v.py = H(x, y) * zScale;
+    v.py = -H(x, y) * zScale;
     const float dx = (H(x + 1, y) - H(x - 1, y)) * zScale / (2.f * invW);
     const float dz = (H(x, y + 1) - H(x, y - 1)) * zScale / (2.f * invH);
-    const float nx = -dx, ny = 1.f, nz = -dz;
+    const float nx = dx, ny = 1.f, nz = dz;
     const float nl = sqrtf(nx * nx + ny * ny + nz * nz);
     v.nx = nx / nl; v.ny = ny / nl; v.nz = nz / nl;
     v.u = (float)x / (float)(w - 1);
