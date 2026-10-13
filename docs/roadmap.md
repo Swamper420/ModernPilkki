@@ -33,6 +33,11 @@ Goal: `pilkki` opens window, loads lake, renders scene, plays sound, input works
   weight min(v*k_line, cap_line), species band tables, 4x16 bait grid
   with consume-on-catch + lure-empty gating, biggest + per-hole tally,
   round-end hold 2000 ms -> Results, AI_* timer formulas
+- State driver 1:1 (`src/state.hpp`): 006304e0 phase protocol,
+  00632560 deferred copy, 7c8790 pause return; 7c6904 sub-state docs
+- Audio routing (`src/audio_play.hpp`, docs/audio.md): 1000-slot clip
+  registry, music select 005c8270 per-lake style, splash = random of 6
+  cast WAVs, catch = NostoPlain; drill stays synth (OSND needs Vorbis)
 
 ## Next
 
@@ -50,6 +55,18 @@ countdown chain 9->...->0x12 durations, drill/bore durations), lake
 walk grid (corner bit 0x10) + real per-cell fish populations, VK->
 command map (00495930), results builder 004c2ce0, full 0048af00
 drilling sub-state walk, world-unit scale vs a captured run
+
+## 3D render: decomp + port (open, the big remaining rock)
+
+Task: find the PLAY-screen 3D scene draw, then port rendering 1:1
+(SDL3). Notes + recipe in docs/decomp-notes.md "Screen vtable dispatch
+map" + "Ghidra headless recipe". Lead: screen-class cluster
+`006489c0/00648d80/00648f60/00649370/00649540/00649a30` (methods at
+vtable disp 0x30 phase, 0x44/0x48/0x4c/0xac). Two decomp attempts were
+cancelled mid-run; raw dumps of wrong function (00640370) + vtable xref
+scan in /tmp/opencode/render-dec/ (volatile scratch). After
+docs/render.md lands: port as NEW files (`src/render3d.*` + viewer +
+tests) first, wire into `main.cpp` last pass.
 
 Rules: match behavior first, flags for new mechanics, build stays
 `cmake -S src -B build && cmake --build build`, tests per system,

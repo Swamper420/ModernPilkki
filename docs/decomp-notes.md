@@ -245,6 +245,31 @@ Mode 1 (legacy): alternating-`NOT` de-obfuscation + byte-sum. See
 `tools/ves_hash.py`. Single-byte-diff pairs across lakes pinned `shift = pos`
 before generalizing.
 
+## Screen vtable dispatch map (raw xref scan, 2026-10-13)
+
+Callers grouped by virtual-method displacement (from
+`/tmp/opencode/render-dec/vt.txt`, scratch). The screen-class cluster:
+`006489c0`, `00648d80`, `00648f60`, `00649370`, `00649540`, `00649a30`
+(~0x841 B) — all have methods at disp 0x30 (phase), 0x44, 0x48, 0x4c,
+0xac. Others: 0x34 -> `00649540/0064ea70`; 0x38 -> `00624ea0/0064a330
+(screenshot)/0064cf10 (Map copy)/0064d0c0`; 0xb8 -> `00495c00`. The 3D
+scene draw is expected behind one of these screen vtables (PLAY =
+mode 0x14/0x15 screen). Not yet dumped.
+
+## Ghidra headless recipe (learned 2026-10-13)
+
+- `.py` postScripts FAIL: "Ghidra was not started with PyGhidra". Use a
+  Java GhidraScript instead — working template
+  `/tmp/opencode/render-scr2/Dump.java` (args: address-list file, output
+  file; one hex address per line, decompiles to C).
+- Command: `/opt/ghidra/support/analyzeHeadless <projdir> Pilkki
+  -process ProPilkki2.exe -noanalysis -scriptPath <dir> -postScript
+  Dump.java addrs.txt out.c` (analysis already done in the base
+  project).
+- Parallel agents: `cp -r` the base project first (`ghidra-proj`,
+  `ghidra-render`/`ghidra-sim`/`ghidra-state`/`ghidra-audio` copies in
+  /tmp/opencode) — one headless per project dir, lock otherwise.
+
 ## Open threads
 
 - D3D11 init: no static caller of the import thunk, string xrefs absent —
