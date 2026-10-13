@@ -84,7 +84,7 @@ Port as NEW files (`src/render3d.*` + viewer + tests) first, wire into
 | 3 | `9af269f` | `src/render3d_layout.hpp` 6 input layouts (`0064b560`), CB table (`0064a790`), fixed buffers (`0064b350`), terrain append (`006487f0`) |
 | 4 | `ae941ac` | shader build (`glslc` -> SPIR-V via CMake, `src/shaders/*.vert\|frag`) + first graphics pipeline: one hardcoded triangle (`src/render3d_pipeline.hpp`), drawn in the `render3d_view` letterbox; SPIR-V artifact assert in `test_render3d` |
 | 5 | `5ea6e54` | layout-B textured quad + the buffer/texture upload path (`src/shaders/quad.*`, `render3d_pipeline.hpp` `Quad`: VS+PS, sampler, RGBA8 texture, VB/IB via `SDL_UploadToGPUBuffer`, `MakeQuad`); drawn in `render3d_view --quad`; pixel-verified offscreen |
-| 6 | `-` | layout-A `.obj` static mesh + `.pcx` texture upload (`render3d_mesh.hpp` `BuildMeshA`, `render3d_pipeline.hpp` `MeshGpu`, clean-room `src/shaders/mesh.*`); `render3d_view --obj P [--tex Q]`; generalised `Ctx::Draw`; pixel-verified with `varis_b.obj` + `varis.pcx` |
+| 6 | `4902336` | layout-A `.obj` static mesh + `.pcx` texture upload (`render3d_mesh.hpp` `BuildMeshA`, `render3d_pipeline.hpp` `MeshGpu`, clean-room `src/shaders/mesh.*`); `render3d_view --obj P [--tex Q]`; generalised `Ctx::Draw`; pixel-verified with `varis_b.obj` + `varis.pcx` |
 | 7 (next) | - | terrain grid gen from DEPTHMAP (`004a7660`/`0040e260`/`006487f0`) as layout-B batches; camera/CB0 (`0064f470`/`00650910`) once view-vs-projection + the fov builder are decompiled (docs/render.md 13); wire the world into `main.cpp` mode 0x14 |
 
 Shaders are re-authored GLSL (clean-room); no DXBC shipped. `glslc`
