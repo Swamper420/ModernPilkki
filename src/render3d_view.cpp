@@ -100,8 +100,9 @@ int main(int argc, char **argv) {
     auto tex = render3d::BuildTerrainTex(depth);
     ready = vert && frag &&
             render3d::InitMeshVerts(gpu.dev, gpu.swapFmt, vert, frag,
-                                    std::move(verts), std::move(tex), depth.w,
-                                    depth.h, mesh);
+                                    std::move(verts), std::move(tex),
+                                    render3d::TexWidthFor(depth.w), depth.h,
+                                    mesh);
   } else if (useTerrain) {
     // Synthetic DEM (a few sine bumps) -> layout-B triangle list; a stand-in
     // for the 004a7660 depth-grid projection (docs/render.md 8).

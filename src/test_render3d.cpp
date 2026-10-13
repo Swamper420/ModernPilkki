@@ -348,9 +348,9 @@ static void testScene() {
   // Normals are unit length.
   for (auto& v : m) assert(fabsf(v.nx*v.nx + v.ny*v.ny + v.nz*v.nz - 1.f) < 1e-4f);
 
-  // Texture is w*h RGBA.
+  // Texture is padded to the 256-byte row pitch, h rows, RGBA.
   auto tex = BuildTerrainTex(g);
-  assert(tex.size() == 9u * 4u);
+  assert(tex.size() == (size_t)TexWidthFor(3) * 3u * 4u);
 
   // Degenerate grid -> empty.
   ves::Grid e;

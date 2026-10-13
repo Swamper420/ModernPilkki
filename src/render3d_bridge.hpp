@@ -64,7 +64,7 @@ struct Bridge {
     }
     if (!InitMeshVerts(dev, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, vertSpv,
                        fragSpv, BuildTerrainMesh(depth), BuildTerrainTex(depth),
-                       depth.w, depth.h, mesh))
+                       TexWidthFor(depth.w), depth.h, mesh))
       return false;
 
     w = width;

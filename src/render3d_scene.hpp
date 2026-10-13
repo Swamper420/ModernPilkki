@@ -74,9 +74,15 @@ inline Mat4 ViewProj(const SceneCam& c, float aspect) {
   return Mul(LookAt(c), Perspective(c.fovDeg, aspect, c.nearZ, c.farZ));
 }
 
+// Vulkan-backed SDL_GPU texture copies need the row pitch aligned to 256 bytes,
+// so RGBA8 scene textures are padded to a 64-pixel-wide multiple.
+inline int TexWidthFor(int w) { return (w + 63) & ~63; }
+
 // Layout-A terrain mesh: world positions, finite-difference normals, uv = grid
 // coords normalised. `zScale` scales the 0..1 depth fraction to world units; the
 // bed sits BELOW y=0 (deep cells are lower), so the lake reads as a basin.
+// uv.x is measured against the padded texture width (TexWidthFor) with a half
+// texel bias, so it lands inside the real columns.
 inline std::vector<VertexA> BuildTerrainMesh(const ves::Grid& depth,
                                              float zScale = 12.f) {
   std::vector<VertexA> out;
@@ -100,8 +106,8 @@ inline std::vector<VertexA> BuildTerrainMesh(const ves::Grid& depth,
     const float nx = dx, ny = 1.f, nz = dz;
     const float nl = sqrtf(nx * nx + ny * ny + nz * nz);
     v.nx = nx / nl; v.ny = ny / nl; v.nz = nz / nl;
-    v.u = (float)x / (float)(w - 1);
-    v.v = (float)y / (float)(h - 1);
+    v.u = ((float)x + 0.5f) / (float)TexWidthFor(w);
+    v.v = ((float)y + 0.5f) / (float)h;
     return v;
   };
   out.reserve((size_t)(w - 1) * (h - 1) * 6);
@@ -114,21 +120,27 @@ inline std::vector<VertexA> BuildTerrainMesh(const ves::Grid& depth,
   return out;
 }
 
-// RGBA texture from the DEPTHMAP palette (256 RGB triplets), one texel per cell,
-// so a cell-aligned uv samples the original depth shading.
+// RGBA texture from the DEPTHMAP grid, one texel per cell, row-padded to
+// TexWidthFor(w) (256-byte pitch). The cell byte is the depth (0 = shore); it is
+// rendered as a water ramp (shallow -> light, deep -> dark blue) rather than the
+// raw grey palette so the stand-in reads as water, matching the 2.5D path's
+// intent (render::BuildBackground). ponytail: replace with the original's
+// palette/water shading once the terrain PS is decompiled.
 inline std::vector<uint8_t> BuildTerrainTex(const ves::Grid& depth) {
-  std::vector<uint8_t> px((size_t)depth.w * depth.h * 4, 0);
-  const bool pal = depth.pal.size() >= 768;
-  for (size_t i = 0; i < depth.cells.size(); ++i) {
-    uint8_t r = 40, g = 90, b = 160;
-    if (pal) {
-      const uint8_t k = depth.cells[i];
-      r = depth.pal[3 * k];
-      g = depth.pal[3 * k + 1];
-      b = depth.pal[3 * k + 2];
+  const int pw = TexWidthFor(depth.w);
+  std::vector<uint8_t> px((size_t)pw * depth.h * 4, 0);
+  for (int y = 0; y < depth.h; ++y)
+    for (int x = 0; x < pw; ++x) {
+      const int cx = x < depth.w ? x : depth.w - 1;  // edge-extend the pad
+      const size_t i = (size_t)y * depth.w + cx;
+      float t = 0.f;
+      if (i < depth.cells.size()) t = depth.cells[i] / 255.f;
+      uint8_t* o = &px[((size_t)y * pw + x) * 4];
+      o[0] = (uint8_t)(120.f - 105.f * t);
+      o[1] = (uint8_t)(180.f - 145.f * t);
+      o[2] = (uint8_t)(200.f - 120.f * t);
+      o[3] = 255;
     }
-    px[4 * i] = r; px[4 * i + 1] = g; px[4 * i + 2] = b; px[4 * i + 3] = 255;
-  }
   return px;
 }
 

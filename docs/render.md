@@ -450,11 +450,13 @@ derived from `model+0x5a0`; exact field map UNVERIFIED).
 
 Stand-in for `004a7660`, not a port: the DEPTHMAP grid becomes a static
 world-space layout-A mesh (`BuildTerrainMesh`: x/z in +-128, y =
-`kSceneDepthTable[cell*17/256]/2500 * zScale`, finite-difference normals, uv =
-normalised grid) plus a palette texture (`BuildTerrainTex`), drawn with a
-clean-room look-at + perspective (`ViewProj`, Vulkan y-down, clip z 0..1). This
-is the standard GPU shape and reuses the layout-A mesh pipeline; it exists so
-the lake can be seen in 3D before the exact CPU projection is decompiled.
+`kSceneDepthTable[cell*17/256]/2500 * zScale` downward so deep cells sit lower,
+finite-difference normals, uv measured against the padded texture width) plus a
+water-ramp texture (`BuildTerrainTex`, row pitch padded to a 256-byte multiple
+for the Vulkan copy), drawn with a clean-room look-at + perspective (`ViewProj`,
+NDC y-up, clip z 0..1). This is the standard GPU shape and reuses the layout-A
+mesh pipeline; it exists so the lake can be seen in 3D before the exact CPU
+projection is decompiled.
 
 ### 8.4 In-game bridge (`src/render3d_bridge.hpp`, `pilkki --3d`)
 
