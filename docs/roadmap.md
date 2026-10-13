@@ -26,8 +26,12 @@ Goal: `pilkki` opens window, loads lake, renders scene, plays sound, input works
 
 - Frame-tick stages + Present (`00649810`, vtable slot 8, `Present(1,0)`)
   + device re-init (`0064ebb0`) + screen transition driver (`006304e0`,
-  phase + permille fades) all decompiled; next: 7c6904 sub-state
-  internals + per-screen vtables; new mechanics behind flags
+  phase + permille fades) + 7c6904 sub-state internals + per-screen
+  vtables (89-slot MENU_* registry) all decompiled; mode protocol
+  ported 1:1 (`src/state.hpp`, pending/active/phase + 00632560
+  deferred copy + 7c8790 pause return, wired via `ui::Step`); next:
+  per-screen fades + 0063ca80 input / 00638dd0 UI draw; new mechanics
+  behind flags
 
 Rules: match behavior first, flags for new mechanics, build stays
 `cmake -S src -B build && cmake --build build`, tests per system,

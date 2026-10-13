@@ -17,11 +17,33 @@
 #include <string>
 #include <vector>
 
+#include "state.hpp"
 #include "ves.hpp"
 
 namespace ui {
 
 enum class State { Title, LakeSelect, Play, Pause, Results };
+// Original 00640370 mode ids (docs "Port mapping today"): Title=10,
+// LakeSelect=11 (11/12 combined), Play=20, Pause=4, Results=21.
+inline int StateId(State s) {
+  switch (s) {
+    case State::Title: return 10;
+    case State::LakeSelect: return 11;
+    case State::Play: return 20;
+    case State::Pause: return 4;
+    case State::Results: return 21;
+  }
+  return 10;
+}
+inline State IdState(int id) {
+  switch (id) {
+    case 4: return State::Pause;
+    case 11: return State::LakeSelect;
+    case 20: return State::Play;
+    case 21: return State::Results;
+    default: return State::Title;
+  }
+}
 // SDLK_R edge, passed straight from the event loop (input bitmap ids 0..8
 // are taken, so this lives outside it).
 inline constexpr uint32_t kRestart = 9;
@@ -130,6 +152,9 @@ struct Hud {
 
 struct Game {
   State state = State::Title;
+  // Original mode driver (00640370 + 00632560 deferred apply); steady
+  // Title: pending==active==10, frame phase running.
+  state::Driver drv{10, 10, state::kFrame, 20};
   std::vector<LakeEntry> lakes;
   int sel = 0;
   int pendIdx = -1;  // LakeSelect choice waiting for main to load
@@ -146,6 +171,22 @@ inline void Init(Game &g, std::vector<LakeEntry> lakes) {
   g.lakes = std::move(lakes);
 }
 
+// Run the 00640370 pass: enter blocks flip g.state (frame/exit blocks
+// hook here when fades land). Synchronous like the original: one call
+// completes exit(old) + enter(new) before returning.
+inline void Step(Game &g) {
+  state::Pass(g.drv, [&](int id, int phase) {
+    if (phase == state::kEnter) g.state = IdState(id);
+  });
+}
+
+// Request a state change (00632560 applies it deferred, then Step
+// runs the exit/enter phases in order).
+inline void To(Game &g, State s) {
+  g.drv.pending = StateId(s);
+  Step(g);
+}
+
 inline void BeginPlay(Game &g, const std::string &name, Rules r) {
   Game fresh;  // reset run stats, keep scanned lake list + cursor
   fresh.lakes = std::move(g.lakes);
@@ -154,20 +195,22 @@ inline void BeginPlay(Game &g, const std::string &name, Rules r) {
   g.lakeName = name;
   g.rules = r;
   g.timeLeft = (float)r.timeSec;
-  g.state = State::Play;
+  To(g, State::Play);
 }
 
 // Menu edge input; ids 0/1/6/7 = input::Keys, kRestart = R key.
 // Gameplay keys (drill/jig/zoom) stay in main + game::Game, gated on Play.
+// Transitions go through the mode driver (To/step); Esc in Play uses the
+// 7c8790 pause-return: state 4 (pause hub) resumes via ResumeId.
 inline void Press(Game &g, uint32_t id) {
   switch (g.state) {
     case State::Title:
-      if (id == 6 && !g.lakes.empty()) g.state = State::LakeSelect;
+      if (id == 6 && !g.lakes.empty()) To(g, State::LakeSelect);
       if (id == 7) g.quit = true;
       break;
     case State::LakeSelect:
       if (g.lakes.empty()) {
-        if (id == 7) g.state = State::Title;
+        if (id == 7) To(g, State::Title);
         break;
       }
       if (id == 0)
@@ -177,18 +220,21 @@ inline void Press(Game &g, uint32_t id) {
         g.pendIdx = g.sel;
         g.needLoad = true;
       }
-      if (id == 7) g.state = State::Title;
+      if (id == 7) To(g, State::Title);
       break;
     case State::Play:
-      if (id == 7) g.state = State::Pause;
+      if (id == 7) {
+        state::Pause(g.drv, StateId(State::Play), StateId(State::Pause));
+        Step(g);
+      }
       break;
     case State::Pause:
-      if (id == 6 || id == 7) g.state = State::Play;
+      if (id == 6 || id == 7) To(g, IdState(state::ResumeId(g.drv)));
       break;
     case State::Results:
       if (id == kRestart) g.needRestart = true;
       if (id == 7) g.quit = true;
-      if (id == 6) g.state = State::LakeSelect;
+      if (id == 6) To(g, State::LakeSelect);
       break;
   }
 }
@@ -200,7 +246,7 @@ inline void Update(Game &g, float dt) {
   g.timeLeft -= dt;
   if (g.timeLeft <= 0) {
     g.timeLeft = 0;
-    g.state = State::Results;
+    To(g, State::Results);
   }
 }
 

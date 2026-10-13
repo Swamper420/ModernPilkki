@@ -67,9 +67,9 @@ active screen object `param_1[1]` through phases at `+0x30`:
 
 `+0x34` = fade-in duration ms, `+0x38` = fade-out duration ms; skips the
 fade when duration is 0. Fades reuse the 00651620 timer/fade system
-(same "Fade_in"/"Fade_out" names). Port has no screen fades yet — map
-here when one is added (`src/ui.hpp` states are flag-driven, not
-phase-driven).
+(same "Fade_in"/"Fade_out" names). Port has the mode protocol but not
+per-screen fades yet (`src/state.hpp`; `src/ui.hpp` frame/exit blocks
+are the hook).
 
 ### Frame order in `00605eb0` (verified, incl. Present)
 
@@ -99,19 +99,20 @@ limiter flag `7c83bc`, sleep `7c83b4`, fps `7c6958`.
 ### 00640370 game-mode state machine (walked)
 
 State written to `DAT_007c6904` (pending), switch reads `DAT_007c6908`
-(active; the deferred copy is applied at loop end by `00632560` —
-verify), phase `DAT_007c690c` per state: 0 = enter,
-1 = per-frame, 2 = exit (states run the three blocks in that order each
-pass). Per-frame tail after the switch: `00632560()`, then when phase 1
-`0049e2b0()` (event pump) and if net handle `7c84b8` && `004487b0()`
--> state `0x31`. Mode/screen query is `FUN_005d86e0`.
+(active; the deferred copy is applied by `00632560` — protocol
+verified, see "7c6904 sub-state internals" below). Phase
+`DAT_007c690c` per state: 0 = enter, 1 = per-frame, 2 = exit (states
+run the three blocks in that order each pass). Per-frame tail when
+phase==1 after the switch: `0049e2b0()` (clears `DAT_007bdd00`), then
+if net handle `7c84b8` && `004487b0()` -> state `0x31`. Mode/screen
+query is `FUN_005d86e0`.
 
 | state | meaning |
 |---|---|
 | 0 | boot: sets `7c6904=1`, `7c6898=0` |
 | 1 | `0063f160()` (splash) -> 10 |
 | 4 | session hub: `005d86e0` result chooses next (0x15 -> `7c8790`; default -> 10); net/lobby calls `004383c0/00439ae0`, `00644220/00644530` |
-| 10 (0xa) | **title/menu**: mode 0x10 -> 4 (start session), 0x14 -> `0x31`, 0x15 -> `7c8790` (return from pause); else back to 10 |
+| 10 (0xa) | **front-end hub**: mode 0x10 -> 4 (start session), 0x14 -> `0x31` (quit path), 0x15 -> `0x14` (start play; see correction below) |
 | 11 (0xb) | one-shot: model `006d197c`, loads `gfx\\pic/linja2.pcx` (loading art) |
 | 12 (0xc) | create session object (0x9e8 B via `00435fc0`); load progress `00633e00(...) > 99` -> state `0x14` |
 | 20 (0x14) | **in-game play**: `0063ca80` input, `00638dd0(1, …)`; Esc (0x1b) or back -> `7c8790=0x14`, state 4 (pause); key `0x45c` -> chat path `0045a540/0045c330`; else key -> `0049e320` |
@@ -122,9 +123,101 @@ pass). Per-frame tail after the switch: `00632560()`, then when phase 1
 | 100 | idle/quit sink |
 
 Port mapping today (`src/ui.hpp`): Title=10, LakeSelect=11/12, Play=20,
-Pause=4 (via 7c8790), Results=21. No phase protocol in the port yet —
-states are event-flag driven instead (open, revisit when replay/net
-lands).
+Pause=4 (via 7c8790), Results=21. States are wired through the port of
+the mode driver (`src/state.hpp`), see "7c6904 sub-state internals"
+below.
+
+### 7c6904 sub-state internals + per-screen vtables (decompiled)
+
+**00632560 verified** — exact deferred protocol (was "verify" above):
+
+```
+pending(7c6904) == active(7c6908):
+    phase 0 -> 1 (enter done), else unchanged
+pending != active:
+    phase 1 or 0 -> 2 (request exit)
+    phase 2      -> phase 0, active = pending   <- the deferred copy
+```
+
+00640370's `do{}while(true)` runs the ACTIVE state's block for the
+current phase, calls 00632560, and loops until phase==1, then runs the
+tail (0049e2b0 = clears `DAT_007bdd00`; net `7c84b8 && 004487b0` ->
+pending 0x31) and returns. So a transition executes frame(old),
+exit(old), enter(new) inside one 00640370 call; frame(new) runs on the
+NEXT call (phase reached 1 at loop exit). Corrections to the state
+table above: state 10's screen-id 0x15 branch sets pending **0x14**
+(start play), NOT 7c8790 — the `7c8790` resume is state **4**'s 0x15
+branch. State 10 has no else (stays); state 4's else -> 10. Also state
+0's block runs when phase==0 (it is the boot enter), state 11 allocates
+a 0x51c model object (vtable from `DAT_006d197c` -> `7c8770`) plus the
+`linja2.pcx` loading art, state 20's Esc branch also latches
+`7c8472` via `00418910(&7c84d4)`.
+
+**Screen driver 006304e0 (second, per-screen phase machine)** — field
+map of the screen object (`param_1[1]`), all offsets verified:
+
+| off | field |
+|---|---|
+| +0x00 | vtable: +0 enter, +4 fade-in tick, +8 frame, +0xc fade-out tick, +0x10 exit (thiscall, ECX=screen) |
+| +0x30 | phase: 0 enter, 1 fade-in, 2 frame, 3 fade-out |
+| +0x34 / +0x38 | fade-in / fade-out duration ms (0 = skip that fade) |
+| +0x3c / +0x40 | "Fade_in"/"Fade_out" timer handles (00650fe0, killed via 00651410) |
+| +0x44 | next screen id; enter resets it to -1; exit reads it, `0058aaf0` lookup, **loops in the new screen's enter in the same call** (do-while, not return) |
+| +0x48 / +0x4c | fade value permille 0..1000 + copy handed to the tick |
+| +0x58 / +0x5c | skip-fade flags (`006306d0` sets +0x58=1 -> fade-in snaps to 1000) |
+
+Driver object (`DAT_007c3f38`, 0x74 B, ctor `006301c0`): +0 current id
+(-1 = none), +4 active screen object, +8 screen list, +0xc event list
+(0x14-B nodes, `0062ffe0` ctor, pushed by `006303c0` = "Input Event.
+id:" log), +0x10 debug-log flag. `0058aaf0`/`0058b510` walk the list by
+index (+8 = next link, +4 = screen ptr). `005d86e0` = set viewport,
+run 006304e0 once, return current id — this is what the 00640370 mode
+states poll.
+
+**Screen registry** (`005c8930`, called from splash `0063f160`): 89
+slots `DAT_007c3f58..0x7c40b8`, slot index = screen id, then all are
+appended to the driver's list (`00630380`). Named vtables + ctor fade
+args (`00630120(0, fadeInMs, fadeOutMs)` or `00630070` = no fades):
+
+| id | screen | fade |
+|---|---|---|
+| 0 | LOAD_ADDON_PACKAGE | in 700 |
+| 1 | START_SCREEN | in 700 |
+| 2 | MAIN | in 700 |
+| 3 | SINGLE_PLAYER | in 500 |
+| 4/5 | SINGLE_GAME / PRACTICE | none |
+| 6..0xb | TEAM_CAPTAIN_GAME, PASSIVE_ROD_{NET_GAME_INFO,START,LAKE,DESTINATION}, SELECT_PLAYER | in 500 |
+| 0xc | SELECT_LAKE | in 500 |
+| 0xd | SELECT_GAME_TYPE | none |
+| 0xe | LOADING_LAKE | in 500 |
+| 0xf | END_SCREEN | out 1800 |
+| 0x10 | PAUSE | none |
+| 0x11/0x12/0x13 | RACE_RUNNING_TO_END, SAVING_FLAG_RODS, RESTORING_FLAG_RODS | none |
+| 0x14 | QUIT | none |
+| 0x15 | PLAY | none |
+| 0x16 | RESULTS_START | out 500 |
+| 0x17 | RESULTS_TOTAL | none |
+| 0x18 | RESULTS_PLAYER | in 500 |
+| 0x19/0x1a | RESULTS_OWN_RECORDS / PRIZES | none |
+| 0x1b | RESULTS_CUP_FINNISHED | in 500 |
+| 0x1c | RESULTS_CUP_PRIZES | none |
+| 0x1d/0x1e | LAKE_INFO / LAKE_INFO_DEPTH | in 500 |
+| 0x29 | SETTINGS | in 500 |
+| 0x2a | QUESTION | none |
+| 0x34..0x37 | SELECT_START_PLACE, MULTI_PLAYER, CHECK_LAKES, SEND_BUG_REPORT | 35-37 in 500 |
+| 0x46/0x47 | SUPPORT_GAME / PRELOADING_LAKES | in 500 |
+| 0x4f..0x53 | RECORDS_CLEARED, NET_RECORDS_INFO, LICENSE_AGREEMENT, INFO_TEXT_WITH_LINK, IMPORT_EXPORT | in 500 |
+| others | anon ctors `005e7*`, `005ae*`, `005d9*`, `005a0*`, `005a9*` | per-ctor |
+
+Mode-state <-> screen-id contract (how 00640370 uses the poll):
+state 10 (front-end): screen 0x10 (PAUSE) -> mode 4, 0x14 (QUIT) ->
+0x31 (quit path), 0x15 (PLAY) -> mode 0x14 (start fishing), else stay.
+State 4 (pause/session hub): screens {0x10,0x12,0x1d,0x1e,0x28,0x41,
+0x42,0x43} keep it open, 0x15 (PLAY) -> pending = 7c8790 (resume the
+Esc-stashed 0x14/0x15), else -> 10. Ported as `src/state.hpp`
+(pending/active/phase + 00632560 deferred copy + 7c8790 pauseRet),
+driven from `ui::Step`/`ui::To` in `src/ui.hpp`; per-screen fades not
+yet ported (frame/exit blocks are the hook).
 
 Constants dumped straight from the PE with `tools/peconst.py` (rdata
 section); faster than decompiler round-trips for float tables.
@@ -202,9 +295,10 @@ manager init (0x100-slot tables, glyph remaps) |
   `0064cf10`, clear color (0.75 grey or scaled), sets viewport, then
   VSSetConstantBuffers (+0x8c). Failure -> `0064e380` teardown.
 - Frame-tick callees + mode query + screen driver decompiled (see
-  "Frame-tick stage bodies" / "Screen/scene transition driver"); left:
-  `00640370` sub-state internals (0063ca80 input, 00638dd0 UI draw) and
-  per-screen vtables behind `006304e0`.
+  "Frame-tick stage bodies" / "Screen/scene transition driver");
+  7c6904 sub-state internals + per-screen vtables decompiled and
+  mode protocol ported (`src/state.hpp`); left: `0063ca80` input /
+  `00638dd0` UI draw, per-screen vtable bodies + fades.
 - D3D11 error strings (`…FAILED`, `d3d11.dll`) have no imm32 refs — fallback
   path addressing TBD, not important.
 - One Ghidra run at a time: parallel runs fail with project LockException.

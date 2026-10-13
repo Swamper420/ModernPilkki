@@ -272,6 +272,7 @@ int main(int argc, char **argv) {
     }
     clock.Update(SDL_GetTicks());
     snd.Update();
+    ui::Step(uim);  // 00640370 pass: run driver phases (steady = no-op)
     ui::Update(uim, clock.delta / 1000.f);  // Play countdown -> Results
     bool simLive = uim.state == ui::State::Play;  // Pause/menus freeze sim
     if (simLive)  // sim runs in <=999ms slices (00471810), stall-safe
