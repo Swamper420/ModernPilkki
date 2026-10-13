@@ -109,6 +109,28 @@ static void SetBgTexture(SDL_Renderer *r, SDL_Texture *&t,
   }
 }
 
+// Screen -> port +-128 world (game::Click takes original units, so main
+// converts via game::FromPortX/Y). ponytail: the inverse skips the PitchY
+// tilt (small y error when zoomed); exact inverse lands with the click
+// semantics walk of 0063ca80 (delta 20 open).
+static bool ScreenToWorld(float mx, float my, int bgW, int bgH,
+                          const render::Camera &cam, int winW, int winH,
+                          float &wx, float &wy) {
+  if (bgW > 0 && bgH > 0) {
+    SDL_FRect src = render::SrcRect(cam, bgW, bgH);
+    SDL_FRect dst = render::DstRect(bgW, bgH, winW, winH);
+    if (src.w <= 0 || src.h <= 0 || dst.w <= 0 || dst.h <= 0) return false;
+    float bx = src.x + (mx - dst.x) / dst.w * src.w;
+    float by = src.y + (my - dst.y) / dst.h * src.h;
+    wx = bx / (float)bgW * 256.f - 128.f;
+    wy = by / (float)bgH * 256.f - 128.f;
+  } else {
+    wx = mx / (winW > 0 ? (float)winW : 1.f) * 256.f - 128.f;
+    wy = my / (winH > 0 ? (float)winH : 1.f) * 256.f - 128.f;
+  }
+  return true;
+}
+
 int main(int argc, char **argv) {
   // Flags filtered out so positional CLI still works.
   bool useBots = true;
@@ -149,7 +171,7 @@ int main(int argc, char **argv) {
   audio::play::Player snd;
   bool haveAudio = snd.Init();
   int nclip = snd.Scan();
-  printf("audio: %s clips %d [PgDn drill PgUp catch Enter splash arrows jig M mute]\n",
+  printf("audio: %s clips %d [click/Arrows move Enter drill Space strike PgUp/PgDn/1-3 line M mute]\n",
          haveAudio ? "on" : "off", nclip);
 
   int winw = 800, winh = 600;
@@ -184,8 +206,11 @@ int main(int argc, char **argv) {
   angler::Load(ang, r);
 
   input::Keys keys;
-  game::Game fish;  // offline loop: move/drill/jig/catch (fish.hpp)
-  fish.newMechanics = true;
+  game::Game fish;  // offline loop: sim in game.hpp (docs/sim.md deltas)
+  // Default = original-exact. newMechanics gates port extras only
+  // (wandering fish dots); the old jig speedup + depth-scaled weight were
+  // deleted with deltas 8/9.
+  fish.newMechanics = false;
   fish.Seed(0x1234);
   fish.SetLake(depth.cells.empty() ? nullptr : &depth,
                hasType ? &typemap : nullptr, &groups);
@@ -214,6 +239,7 @@ int main(int argc, char **argv) {
   float lineX = 0, lineY = 0;
   bool run = true;
   int frames = 0;
+  float endHoldMs = 0;  // round-end hold before Results (00650fe0 2000ms)
   while (run && (!cap || frames < cap)) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
@@ -248,6 +274,12 @@ int main(int argc, char **argv) {
             snd.ToggleMute();
             printf("mute %d\n", snd.muted);
           }
+          // rod slots 1/2/3 -> line buckets 10/20/30 m (docs/sim.md 4.3)
+          if (uim.state == ui::State::Play) {
+            if (e.key.key == SDLK_1) fish.SetSlot(0);
+            if (e.key.key == SDLK_2) fish.SetSlot(1);
+            if (e.key.key == SDLK_3) fish.SetSlot(2);
+          }
         }
         if (down) {  // +/- zoom (repeat ok); PgUp/PgDn stay line depth
           switch (e.key.key) {
@@ -264,6 +296,12 @@ int main(int argc, char **argv) {
       if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
           e.button.button == SDL_BUTTON_LEFT) {
         menu::Click(uim, setup, (int)e.button.x, (int)e.button.y, winw, winh);
+        if (uim.state == ui::State::Play) {  // 0047f530 click-to-move
+          float pwx, pwy;
+          if (ScreenToWorld((float)e.button.x, (float)e.button.y, bg.w, bg.h,
+                            cam, winw, winh, pwx, pwy))
+            fish.Click(fish.FromPortX(pwx), fish.FromPortY(pwy));
+        }
       }
     }
     if (uim.quit) {
@@ -273,32 +311,47 @@ int main(int argc, char **argv) {
     clock.Update(SDL_GetTicks());
     snd.Update();
     ui::Step(uim);  // 00640370 pass: run driver phases (steady = no-op)
-    ui::Update(uim, clock.delta / 1000.f);  // Play countdown -> Results
+    if (uim.state == ui::State::Play && uim.timeLeft <= 0) {
+      // Round-end hold (game::kEndHoldMs, 00650fe0 end timer) -> Results.
+      endHoldMs += (float)clock.delta;
+      if (endHoldMs >= (float)game::kEndHoldMs) ui::To(uim, ui::State::Results);
+    } else {
+      ui::Update(uim, clock.delta / 1000.f);  // Play countdown -> Results
+    }
     bool simLive = uim.state == ui::State::Play;  // Pause/menus freeze sim
     if (simLive)  // sim runs in <=999ms slices (00471810), stall-safe
-      tick::Slices(clock.delta,
-                   [&](uint32_t ms) { fish.Update(keys, ms / 1000.f); });
-    if (simLive && fish.justDrilled) {  // drill sfx + drop line to new hole
-      lineOut = true;
-      lineX = fish.x;
-      lineY = fish.y;
-      camera::Kick(cfx, 0.35f);
-      snd.Drill();
-      snd.Splash();
-      printf("drilled hole #%zu at (%.1f,%.1f) depth %dcm line %.1fm\n",
-             fish.holes.size(), fish.x, fish.y,
-             (int)(fish.DepthFracAt(fish.x, fish.y) * 2500), fish.lineDepth);
-    }
-    if (simLive && fish.justBite) {
-      snd.Jig();
-      printf("BITE! press SPACE\n");
-    }
-    if (simLive && fish.justCaught) {
-      camera::Kick(cfx, 0.5f);
-      snd.Catch();
-      printf("caught %.2fkg total %d (%.2fkg)\n", fish.lastKg, fish.catches,
-             fish.totalKg);
-      if (useBots) comp.AddPlayerCatch((int)(fish.lastKg * 1000));
+      tick::Slices(clock.delta, [&](uint32_t ms) {
+        fish.Update(keys, ms / 1000.f);
+        // Flags are per-slice (cleared at Update start), so sfx/tallies
+        // are consumed inside the slice loop.
+        if (fish.justDrilled) {  // drill sfx; line drops at bore end
+          camera::Kick(cfx, 0.35f);
+          snd.Drill();
+          snd.Splash();
+          printf("drilled hole #%zu at (%.0f,%.0f) depth %dcm line %dm\n",
+                 fish.holes.size(), fish.x, fish.y,
+                 (int)fish.DepthCm(fish.x, fish.y), fish.lineDepth);
+        }
+        if (fish.justBite) {
+          snd.Jig();
+          printf("BITE! press SPACE\n");
+        }
+        if (fish.justCaught) {
+          camera::Kick(cfx, 0.5f);
+          snd.Catch();
+          printf("caught %.2fkg total %d (%.2fkg)\n", fish.lastKg,
+                 fish.catches, fish.totalKg);
+          if (useBots) comp.AddPlayerCatch((int)(fish.lastKg * 1000));
+        }
+      });
+    // 00488060: line stays out while at a hole with an active lure.
+    lineOut = fish.LineOut();
+    if (lineOut) {
+      double hx, hy;
+      if (fish.ActiveHole(hx, hy)) {
+        lineX = fish.PortX(hx);
+        lineY = fish.PortY(hy);
+      }
     }
     if (simLive && useBots) {
       comp.Tick();
@@ -326,6 +379,7 @@ int main(int argc, char **argv) {
       pl = render::Player{};
       holes.clear();
       lineOut = false;
+      endHoldMs = 0;
       if (useBots) {
         auto names = offline::Roster(comp.chat);
         comp.Init(names, comp.chat, setup.bots, setup.timeSec * 60, 0xB07);
@@ -343,6 +397,7 @@ int main(int argc, char **argv) {
       pl = render::Player{};
       holes.clear();
       lineOut = false;
+      endHoldMs = 0;
       if (useBots) {
         auto names = offline::Roster(comp.chat);
         comp.Init(names, comp.chat, setup.bots, setup.timeSec * 60, 0xB07);
@@ -351,10 +406,11 @@ int main(int argc, char **argv) {
       ui::BeginPlay(uim, uim.lakeName, uim.rules);
     }
     if (driver.Step() == tick::Action::Quit) break;
-    // game owns movement/drill (24 u/s, +-128 world); camera lerps after.
-    // Zoom: wheel / +/- keys. PgUp/PgDn stay line depth (game.hpp).
-    pl.x = fish.x;
-    pl.y = fish.y;
+    // game owns movement/drill (click-to-move, original units); camera
+    // lerps in the port +-128 frame via game::PortX/PortY.
+    // Zoom: wheel / +/- keys. PgUp/PgDn step the line bucket (game.hpp).
+    pl.x = fish.PortX(fish.x);
+    pl.y = fish.PortY(fish.y);
     camera::Update(cam, pl.x, pl.y, clock.delta / 1000.f);
     cam.pitch = camera::PitchForZoom(cam.zoom);
     float shx = 0, shy = 0;
@@ -364,7 +420,8 @@ int main(int argc, char **argv) {
     vc.y += shy;
     SDL_GetWindowSize(w, &winw, &winh);  // resize: aspect from bg in Draw
     holes.clear();  // render mirrors game holes (single authority)
-    for (auto &h : fish.holes) holes.push_back({h.x, h.y});
+    for (auto &h : fish.holes)
+      holes.push_back({fish.PortX(h.x), fish.PortY(h.y)});
     if (r) {
       terrain::Draw(r, t, bg.w, bg.h, groups, tab, vc, pl, holes, false,
                     0, 0, winw, winh, &mBank, &mTex);
@@ -384,18 +441,25 @@ int main(int argc, char **argv) {
         hud.holes = (int)fish.holes.size();
         hud.catches = fish.catches;
         hud.kg = fish.totalKg;
-        if (!depth.cells.empty()) {
-          int cx = (int)((fish.x + 128.f) / 256.f * depth.w);
-          int cy = (int)((fish.y + 128.f) / 256.f * depth.h);
-          cx = std::max(0, std::min((int)depth.w - 1, cx));
-          cy = std::max(0, std::min((int)depth.h - 1, cy));
-          hud.depthAt = depth.cells[(size_t)cy * depth.w + cx];
-        }
+        if (!depth.cells.empty())
+          hud.depthAt = (int)fish.DepthAt(fish.x, fish.y);  // bilinear cell
         if (uim.state == ui::State::Title ||
             uim.state == ui::State::LakeSelect)
           menu::Draw(r, mback, uim, setup, winw, winh);
         else
           ui::Render(uim, r, hud);
+        if (uim.state == ui::State::Results) {  // 004c2ce0 result rows
+          char rr[64];
+          if (fish.catches == 0) {
+            SDL_RenderDebugText(r, 16, winh - 96, "No bites.");
+          } else {
+            snprintf(rr, sizeof rr, "Kalojen yhteispaino %.1f kg",
+                     fish.totalKg);
+            SDL_RenderDebugText(r, 16, winh - 96, rr);
+            snprintf(rr, sizeof rr, "Isoin kala %.1f kg", fish.biggest);
+            SDL_RenderDebugText(r, 16, winh - 84, rr);
+          }
+        }
         if (useBots && (uim.state == ui::State::Play ||
                         uim.state == ui::State::Results)) {
           auto board = comp.Board();
@@ -419,9 +483,9 @@ int main(int argc, char **argv) {
     if ((frames % 30) == 0) {  // text HUD via title (no font dep)
       char title[192];
       snprintf(title, sizeof title,
-               "ModernPilkki (%.0f,%.0f) holes %zu line %.1fm caught %d "
+               "ModernPilkki (%d,%d) holes %zu line %dm caught %d "
                "(%.1fkg)%s",
-               fish.x, fish.y, fish.holes.size(), fish.lineDepth,
+               (int)fish.x, (int)fish.y, fish.holes.size(), fish.lineDepth,
                fish.catches, fish.totalKg,
                fish.Biting() ? " BITE-space!" : "");
       SDL_SetWindowTitle(w, title);

@@ -149,6 +149,27 @@ struct Catch {
   int grams = 0;
 };
 
+// AI_* timer formulas (docs/sim.md section 5), skill 0..10. These are the
+// original durations; the full AI state machines (AI_STATE_* handlers +
+// shared action queue) are not wired yet (open, delta 18/20).
+inline int AIEiSyoMs(int r, int skill) {
+  if (skill < 0) skill = 0;
+  if (skill > 10) skill = 10;
+  return ((r % (11 - skill)) - skill + 20) * 1000;
+}
+inline int AINoFishShortMs(int r, int skill) { return AIEiSyoMs(r, skill); }
+inline int AINoFishLongMs(int r, bool lake) {
+  return lake ? (r % 10000) + 60000 : (r % 5000) + 35000;
+}
+inline int AIBoreMs(int r) { return (r % 100 + 20) * 100; }
+inline int AIKorjausMs(int skill) { return (14 - skill) * 1000; }
+inline int AISyokoMs() { return 1000; }
+inline int AITempMs() { return 500; }
+inline int AISinkingMs() { return 3000; }
+
+// Comp::Tick runs per frame (~60 fps), so AI durations convert to ticks.
+inline int BotTicks(int ms) { return (int)((double)ms / (1000.0 / 60.0) + 0.5); }
+
 struct Bot {
   std::string name;
   float skill = 0.5f;  // 0..1 catch size/rate variance
@@ -159,6 +180,10 @@ struct Bot {
   int count = 0;
   std::string bubble;  // current chat bubble
   int bubbleTtl = 0;
+  int Skill10() const {  // AI skill 0..10 from the 0..1 variance
+    int s = (int)(skill * 10 + 0.5f);
+    return s < 0 ? 0 : (s > 10 ? 10 : s);
+  }
 };
 
 // One bot tick. Returns catch grams (0 = none).
@@ -166,9 +191,7 @@ inline int TickBot(Bot &b, const std::vector<ChatLine> &chat,
                    std::mt19937 &rng) {
   if (b.bubbleTtl > 0 && --b.bubbleTtl == 0) b.bubble.clear();
   std::uniform_real_distribution<float> mv(-0.05f, 0.05f);
-  std::uniform_int_distribution<int> wait(40, 160);
-  std::uniform_int_distribution<int> drill(20, 60);
-  if (b.state == 0) {  // wander
+  if (b.state == 0) {  // wander, then drill (AI_bore_timer2)
     b.x += mv(rng);
     b.y += mv(rng);
     if (b.x > 1) b.x = 1;
@@ -177,7 +200,7 @@ inline int TickBot(Bot &b, const std::vector<ChatLine> &chat,
     if (b.y < -1) b.y = -1;
     if (--b.t <= 0) {
       b.state = 1;
-      b.t = drill(rng);
+      b.t = BotTicks(AIBoreMs((int)(rng() & 0x7fffffff)));
     }
     return 0;
   }
@@ -188,7 +211,8 @@ inline int TickBot(Bot &b, const std::vector<ChatLine> &chat,
     b.score += grams;
     b.count++;
     b.state = 0;
-    b.t = wait(rng);
+    // AI_ei_syo_short wait before the next bite attempt.
+    b.t = BotTicks(AIEiSyoMs((int)(rng() & 0x7fffffff), b.Skill10()));
     // Chat bubble: prefer own name's line, else any (FI fallback in Text).
     const ChatLine *pick = nullptr;
     for (auto &c : chat)
@@ -228,7 +252,8 @@ struct Comp {
       b.name = names[i];
       b.skill = sk(rng);
       b.x = (float)i / (nBots > 1 ? nBots - 1 : 1) * 2 - 1;
-      b.t = 30 + i * 20;
+      // first wander stretch uses the AI_ei_syo wait formula too
+      b.t = BotTicks(AIEiSyoMs((int)(rng() & 0x7fffffff), b.Skill10()));
       bots.push_back(b);
     }
     countdown = countTicks;

@@ -370,9 +370,12 @@ inline bool DrawOverlay(SDL_Renderer *r, Assets &a,
     }
     if (a.catchT > 0) a.catchT -= dt;
   }
+  // game.hpp sim runs in original units (600-unit cells); ToScreen takes
+  // the port +-128 frame, bridged via g.PortX/PortY.
   for (auto &h : g.holes) {
     float hx, hy;
-    if (ToScreen(h.x, h.y, cam, bgW, bgH, winW, winH, hx, hy))
+    if (ToScreen(g.PortX(h.x), g.PortY(h.y), cam, bgW, bgH, winW, winH, hx,
+                 hy))
       DrawHole(r, hx, hy, 1);
   }
   float sx, sy;
@@ -381,13 +384,14 @@ inline bool DrawOverlay(SDL_Renderer *r, Assets &a,
   float tx = sx, ty = sy;
   if (lineOut) {
     ToScreen(lineX, lineY, cam, bgW, bgH, winW, winH, tx, ty);
-  } else if (!g.holes.empty()) {
+  } else if (!g.holes.empty()) {  // nearest hole (original units -> port)
     float bd = 1e30f;
     for (auto &h : g.holes) {
-      float dx = h.x - px, dy = h.y - py, d = dx * dx + dy * dy;
+      float pthX = g.PortX(h.x), pthY = g.PortY(h.y);
+      float dx = pthX - px, dy = pthY - py, d = dx * dx + dy * dy;
       if (d < bd) {
         bd = d;
-        ToScreen(h.x, h.y, cam, bgW, bgH, winW, winH, tx, ty);
+        ToScreen(pthX, pthY, cam, bgW, bgH, winW, winH, tx, ty);
       }
     }
   }
@@ -411,10 +415,12 @@ inline bool DrawOverlay(SDL_Renderer *r, Assets &a,
   }
   DrawRod(r, a, hx, hy, tx, ty, g.jigPhase);
   DrawCatch(r, a, sx, sy);
-  if (a.fishFrames.empty()) {  // fallback: underwater dots
+  if (a.fishFrames.empty()) {  // fallback: underwater dots (newMechanics)
     for (auto &f : g.fishes) {
       float fx, fy;
-      if (!ToScreen(f.x, f.y, cam, bgW, bgH, winW, winH, fx, fy)) continue;
+      if (!ToScreen(g.PortX(f.x), g.PortY(f.y), cam, bgW, bgH, winW, winH, fx,
+                    fy))
+        continue;
       bool hot = f.st != game::State::Idle;
       SDL_SetRenderDrawColor(r, hot ? 255 : 80, hot ? 140 : 220,
                              hot ? 20 : 80, 255);
