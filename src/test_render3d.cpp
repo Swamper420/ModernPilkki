@@ -3,11 +3,40 @@
 // No SDL window or GPU device needed.
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <vector>
 
 #include "render3d.hpp"
 #include "render3d_layout.hpp"
 #include "render3d_math.hpp"
+
+// Iteration 4: the CMake shader step must have produced valid SPIR-V for the
+// re-authored triangle shaders. Pure file check -- no GPU device needed.
+static bool readMagic(const char* path, uint32_t& magic, size_t& size) {
+  FILE* f = fopen(path, "rb");
+  if (!f) return false;
+  fseek(f, 0, SEEK_END);
+  long n = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  bool ok = n > 4 && fread(&magic, 4, 1, f) == 1;
+  size = ok ? (size_t)n : 0;
+  fclose(f);
+  return ok;
+}
+
+static void testShaderArtifacts() {
+#if defined(RENDER3D_VERT_SPV) && defined(RENDER3D_FRAG_SPV)
+  const uint32_t kSpirvMagic = 0x07230203u;
+  uint32_t m = 0;
+  size_t n = 0;
+  assert(readMagic(RENDER3D_VERT_SPV, m, n) && m == kSpirvMagic);
+  assert(n >= 20);
+  assert(readMagic(RENDER3D_FRAG_SPV, m, n) && m == kSpirvMagic);
+  assert(n >= 20);
+#endif
+}
 
 static bool eq(float a, float b) { return fabsf(a - b) < 1e-4f; }
 
@@ -191,6 +220,7 @@ int main() {
 
   testMatrixMath();
   testLayouts();
+  testShaderArtifacts();
 
   printf("render3d tests pass\n");
   return 0;

@@ -69,3 +69,35 @@ target_link_libraries(render3d_view PRIVATE SDL3::SDL3)
 add_executable(test_render3d test_render3d.cpp)
 target_include_directories(test_render3d PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(test_render3d PRIVATE SDL3::SDL3)
+
+# Iteration 4: re-authored GLSL -> SPIR-V via glslc (clean-room; no DXBC is
+# shipped). Skipped entirely when glslc is absent -- the GPU targets then just
+# build without shaders (render3d_view falls back to clear-only).
+find_program(GLSL_COMPILER NAMES glslc)
+if(GLSL_COMPILER)
+  set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+  set(RENDER3D_VERT_SPV ${CMAKE_CURRENT_BINARY_DIR}/triangle.vert.spv)
+  set(RENDER3D_FRAG_SPV ${CMAKE_CURRENT_BINARY_DIR}/triangle.frag.spv)
+  add_custom_command(
+    OUTPUT ${RENDER3D_VERT_SPV}
+    COMMAND ${GLSL_COMPILER} -fshader-stage=vert ${SHADER_SRC_DIR}/triangle.vert
+            -o ${RENDER3D_VERT_SPV}
+    DEPENDS ${SHADER_SRC_DIR}/triangle.vert
+    COMMENT "glslc triangle.vert")
+  add_custom_command(
+    OUTPUT ${RENDER3D_FRAG_SPV}
+    COMMAND ${GLSL_COMPILER} -fshader-stage=frag ${SHADER_SRC_DIR}/triangle.frag
+            -o ${RENDER3D_FRAG_SPV}
+    DEPENDS ${SHADER_SRC_DIR}/triangle.frag
+    COMMENT "glslc triangle.frag")
+  add_custom_target(render3d_shaders DEPENDS ${RENDER3D_VERT_SPV}
+                                             ${RENDER3D_FRAG_SPV})
+  foreach(tgt render3d_view test_render3d)
+    target_compile_definitions(${tgt} PRIVATE
+      RENDER3D_VERT_SPV="${RENDER3D_VERT_SPV}"
+      RENDER3D_FRAG_SPV="${RENDER3D_FRAG_SPV}")
+    add_dependencies(${tgt} render3d_shaders)
+  endforeach()
+else()
+  message(STATUS "glslc not found: 3D shader build skipped (clear-only viewer)")
+endif()

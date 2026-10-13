@@ -37,6 +37,7 @@ struct Ctx {
 
   SDL_GPUCommandBuffer *cmd = nullptr;
   SDL_GPUTexture *swap = nullptr;
+  SDL_GPUTextureFormat swapFmt = SDL_GPU_TEXTUREFORMAT_INVALID;
 
   // false (no crash) when no GPU driver/device is available (headless/dummy).
   bool Init(SDL_Window *w) {
@@ -49,6 +50,7 @@ struct Ctx {
       return false;
     }
     SDL_GetWindowSizeInPixels(win, &pixW, &pixH);
+    swapFmt = SDL_GetGPUSwapchainTextureFormat(dev, win);
     return true;
   }
 
@@ -94,8 +96,9 @@ struct Ctx {
     return true;
   }
 
-  // Clear + letterbox viewport, then submit. No geometry yet.
-  void EndFrame() {
+  // Clear + letterbox viewport, then submit. If `tri` is set, one hardcoded
+  // triangle is drawn inside the viewport (iteration 4 GPU smoke test).
+  void EndFrame(SDL_GPUGraphicsPipeline *tri = nullptr) {
     if (!cmd) return;
     float g = ClearGrey();
     SDL_GPUColorTargetInfo ct{};
@@ -107,6 +110,10 @@ struct Ctx {
     Rect r = Letterbox(pixW, pixH, 4.f / 3.f);
     SDL_GPUViewport vp{r.x, r.y, r.w, r.h, 0.f, 1.f};
     SDL_SetGPUViewport(rp, &vp);
+    if (tri) {
+      SDL_BindGPUGraphicsPipeline(rp, tri);
+      SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+    }
     SDL_EndGPURenderPass(rp);
     SDL_SubmitGPUCommandBuffer(cmd);
     cmd = nullptr;
