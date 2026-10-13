@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "render3d.hpp"
+#include "render3d_layout.hpp"
 #include "render3d_math.hpp"
 
 static bool eq(float a, float b) { return fabsf(a - b) < 1e-4f; }
@@ -83,6 +84,82 @@ static void testMatrixMath() {
              render3d::Mul(P, render3d::WorldMatrix(1, 2, 3, 90, 0, 0, 0))));
 }
 
+// Format byte size (only the formats used by 0064b560's descriptors).
+static uint32_t fmtSize(SDL_GPUVertexElementFormat f) {
+  switch (f) {
+    case SDL_GPU_VERTEXELEMENTFORMAT_FLOAT: return 4;
+    case SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2: return 8;
+    case SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3: return 12;
+    case SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4: return 16;
+    case SDL_GPU_VERTEXELEMENTFORMAT_UINT: return 4;
+    default: assert(false && "unexpected format"); return 0;
+  }
+}
+
+// Every attribute must land inside its buffer slot's stride, and its slot must
+// have a buffer description.
+static void checkLayout(const SDL_GPUVertexBufferDescription* d, size_t dn,
+                        const SDL_GPUVertexAttribute* a, size_t an) {
+  for (size_t i = 0; i < an; ++i) {
+    const SDL_GPUVertexAttribute& at = a[i];
+    const SDL_GPUVertexBufferDescription* bd = nullptr;
+    for (size_t j = 0; j < dn; ++j)
+      if (d[j].slot == at.buffer_slot) bd = &d[j];
+    assert(bd && "attribute references missing buffer slot");
+    assert(at.offset + fmtSize(at.format) <= bd->pitch &&
+           "attribute overruns vertex stride");
+  }
+}
+
+static void testLayouts() {
+  using namespace render3d;
+
+  // Vertex-type strides/offsets (compile-time static_asserts in the header too).
+  assert(sizeof(VertexA) == 0x20 && sizeof(VertexF) == 0x24 &&
+         sizeof(VertexB) == 0x18 && sizeof(VertexC) == 4 &&
+         sizeof(InstanceE) == 0x40);
+
+  // 0064b560 descriptor tables: element count + stride + instance rate.
+  assert(sizeof kAttrA / sizeof *kAttrA == 3 && kDescA[0].pitch == 0x20);
+  assert(sizeof kAttrF / sizeof *kAttrF == 4 && kDescF[0].pitch == 0x24);
+  assert(sizeof kAttrE / sizeof *kAttrE == 7 && kDescE[1].pitch == 0x40);
+  assert(kDescE[1].input_rate == SDL_GPU_VERTEXINPUTRATE_INSTANCE);
+  assert(kDescE[0].input_rate == SDL_GPU_VERTEXINPUTRATE_VERTEX);
+  assert(sizeof kAttrB / sizeof *kAttrB == 4 && kDescB[0].pitch == 0x18);
+  assert(sizeof kAttrD / sizeof *kAttrD == 4 && kDescD[0].pitch == 0x18);
+  assert(sizeof kAttrC / sizeof *kAttrC == 1 && kDescC[0].pitch == 0x4);
+
+  checkLayout(kDescA, 1, kAttrA, 3);
+  checkLayout(kDescF, 1, kAttrF, 4);
+  checkLayout(kDescE, 2, kAttrE, 7);
+  checkLayout(kDescB, 1, kAttrB, 4);
+  checkLayout(kDescD, 1, kAttrD, 4);
+  checkLayout(kDescC, 1, kAttrC, 1);
+
+  // 0064a790 constant-buffer table: sizes in create order, VS/PS bind slots.
+  assert(kConstantBuffers[0].size == 0x50 && kConstantBuffers[0].vs_slot == 0);
+  assert(kConstantBuffers[1].size == 0x40 && kConstantBuffers[1].vs_slot == 1);
+  assert(kConstantBuffers[2].size == 0x40 && kConstantBuffers[2].vs_slot == 2);
+  assert(kConstantBuffers[3].size == 0x40 && kConstantBuffers[3].vs_slot == 3 &&
+         kConstantBuffers[3].ps_slot == 3);
+  assert(kConstantBuffers[4].size == 0x10 && kConstantBuffers[4].vs_slot == 4);
+  assert(kConstantBuffers[5].size == 0x50 && kConstantBuffers[5].vs_slot == 5);
+  assert(kConstantBuffers[6].size == 0x40 && kConstantBuffers[6].ps_slot == 6 &&
+         kConstantBuffers[6].vs_slot == -1);
+  assert(kConstantBuffers[7].size == 0x600 && kConstantBuffers[7].vs_slot == 7);
+
+  // 0064b350 fixed buffers.
+  assert(kFixedQuadVbBytes == 0x60 && kFixedQuadIbBytes == 0x8 &&
+         kFixedRectIbBytes == 0x4 && kFixedTriVbBytes == 0xc);
+  assert(kFixedQuadVbBytes / kStrideB == 4);  // 4 layout-B quad verts
+  assert(kFixedTriVbBytes / kStrideC == 3);   // 3 layout-C point verts
+
+  // 006487f0 terrain append round-trip.
+  VertexB v = MakeTerrainVertex(3, 4, 0.25f, 0.75f, 0.5f, 0.8f);
+  assert(v.x == 3.f && v.y == 4.f && v.u == 0.25f && v.v == 0.75f &&
+         v.depth == 0.5f && v.alpha == 0.8f);
+}
+
 int main() {
   // 16:9 target in a 4:3 window -> full width, letterbox top/bottom.
   render3d::Rect r = render3d::Letterbox(800, 600, 16.f / 9.f);
@@ -113,6 +190,7 @@ int main() {
   assert(eq(render3d::ClearGrey(), 0.75f));
 
   testMatrixMath();
+  testLayouts();
 
   printf("render3d tests pass\n");
   return 0;
