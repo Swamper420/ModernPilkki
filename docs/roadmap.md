@@ -89,7 +89,8 @@ Port as NEW files (`src/render3d.*` + viewer + tests) first, wire into
 | 8 | `da90636` | world-space lake scene (`src/render3d_scene.hpp`): DEPTHMAP -> layout-A mesh + palette texture + clean-room look-at/perspective; `InitMeshVerts` split in `render3d_pipeline.hpp`; `render3d_view --lake P`; tests |
 | 9 | `c5e4ae8` | in-game bridge (`src/render3d_bridge.hpp`, `pilkki --3d`): offscreen SDL_GPU scene -> per-frame readback -> `SDL_Texture` PLAY background under the SDL_Renderer HUD; angler re-drawn at a fixed spot; CMake defines the shader paths for `pilkki` |
 | 10 | `3771cc8` | static lake objects (`src/render3d_objects.hpp`): objpos -> baked world-space layout-A meshes (objects.dat Angle/Scale, game units -> +-128 frame), drawn in `pilkki --3d`; world-pass depth buffer (new `depthFmt` arg on `InitMeshVerts` + `render3d_bridge` depth target); clean-room magenta colour-key in `mesh.frag`; case-insensitive asset open; tests |
-| 11 (next) | - | exact `004a7660` projection (cell array `+0x15248`, frame-delta `7c695c`, camera `+0x1ee88/90/98`); move the HUD to SDL_GPU and drop the readback bridge; dynamic entities (fish/other anglers, 004a7030) and the local rod (0040b0b0) |
+| 11 | `-` | exact `004a7660` weather projection (`src/render3d_terrain.hpp` `WeatherField/SpawnWeather/UpdateWeather`): 004bce00 spawn (166 snow / 500 rain, wide x1.5 clamp 1000), depth factor `s`, wind + camera parallax, one-step screen wrap + life re-roll, 20*pi phase wrap, sin(1/2+1/10)-sway right-triangle into the it7 layout-B batch; `render3d_view --weather`; docs/render.md 8.6 CORRECTS §8: `004a7660` is the particle field, not the DEPTHMAP grid (bed pass `004a67b0`/`004a84a0` stays open); tests |
+| 12 (next) | - | move the HUD to SDL_GPU and drop the readback bridge; dynamic entities (fish/other anglers, 004a7030) and the local rod (0040b0b0); wire `WeatherField` into `pilkki --3d` (needs weather id + `004c02d0` wind tables); `004a7b70` menu-screen variant (caller `004841e0`) |
 
 Shaders are re-authored GLSL (clean-room); no DXBC shipped. `glslc`
 present in this env; CMake targets skip the GPU/exe gracefully if absent
@@ -114,6 +115,10 @@ clips, 5 bots, 2083 mesh tris) and exits 0. it10: the same `--3d` run prints
 `3d props: 30` (haapolahti) / `13` (vuolasniva) and the offscreen render shows
 the lake's trees/buildings/cars placed on the terrain (`propscheck`, scratch);
 the terrain + props pass is depth-tested (D32_FLOAT) and magenta is cut out.
+it11: `SDL_VIDEODRIVER=offscreen SDL_GPU_DRIVER=vulkan ./build/render3d_view
+--weather --frames 30` prints `weather pipeline ready`; a scratch check
+(`weathercheck`) renders 166 snow cells into an offscreen target — 7052/307200
+drawn pixels, both checker colours (per-frame dynamic VB rebuild verified).
 
 ### Known issues (pre-existing, unrelated to the 3D work)
 

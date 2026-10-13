@@ -451,6 +451,145 @@ static void testProps() {
   assert(BakeProps(none, one, g, 20.f, 0.f, 0.f).empty());
 }
 
+// Iteration 11: 004bce00 spawn + 004a7660 weather projection (render3d_terrain).
+static void testWeather() {
+  using namespace render3d;
+  game::MsvcRand rng;
+
+  // --- spawn: counts, exact rand order (W, H+0x60, 500, 600, 1000) ---
+  rng.Seed(0x1234);
+  WeatherField wf;
+  SpawnWeather(wf, 1, 1000, 600, 4321, rng);  // narrow window: no x1.5
+  assert(wf.cells.size() == 166u);
+  game::MsvcRand ref;
+  ref.Seed(0x1234);
+  assert(eq(wf.cells[0].x, (float)ref.RandMax(1000)));
+  assert(eq(wf.cells[0].y, (float)ref.RandMax(696)));
+  assert(eq(wf.cells[0].z, (float)ref.RandMax(500)));
+  assert(wf.cells[0].ts == 4321);
+  assert(eq(wf.cells[0].vx, 0.f));
+  assert(eq(wf.cells[0].vy, 600.f * 0.0005555555690079927f));
+  assert(eq(wf.cells[0].vz, 0.2f));
+  assert(eq(wf.cells[0].phase, (float)ref.RandMax(600) * 0.01f, 1e-6f));
+  assert(eq(wf.cells[0].phaseVel,
+            6.283180236816406f / ((float)ref.RandMax(1000) + 3000.0f)));
+  assert(eq(wf.cells[0].z0, wf.cells[0].z));
+  for (auto& c : wf.cells)
+    assert(c.x >= 0.f && c.x < 1000.f && c.y >= 0.f && c.y < 696.f &&
+           c.z >= 0.f && c.z < 500.f);
+  SpawnWeather(wf, 2, 1300, 600, 100, rng);  // wide: rain 500 x1.5 = 750
+  assert(wf.cells.size() == 750u);
+  SpawnWeather(wf, 0, 1300, 600, 200, rng);
+  assert(wf.cells.empty());
+  assert(WeatherFace().flags == 1);  // skip-cull face 004bce00 bakes
+
+  // --- projection: static cell -> one right triangle (16px leg, narrow) ---
+  WeatherField pf;
+  pf.cells.resize(1);
+  pf.cells[0] = WeatherCell{100.f, 100.f, 0.f, 0, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+  WeatherFrame fr;
+  fr.winW = 1000;
+  fr.winH = 600;
+  rng.Seed(1);
+  std::vector<VertexB> b;
+  assert(UpdateWeather(pf, fr, rng, b, (size_t)-1) == 1);
+  assert(b.size() == 3);
+  assert(b[0].x == 100.f && b[0].y == 52.f);  // y_top = trunc(100) - 0x30
+  assert(b[1].x == 116.f && b[1].y == 52.f);  // leg w = round((1-0*0.0008)*16)
+  assert(b[2].x == 100.f && b[2].y == 68.f);
+  assert(b[0].depth == kCellDepth && b[0].alpha == 1.f);
+  assert(b[0].u == 2.f && b[0].v == 2.f && b[1].u == 48.f && b[2].v == 48.f);
+
+  // fall + depth clamp: z hits 1000 -> re-roll (rand order y then z)
+  rng.Seed(77);
+  game::MsvcRand r2;
+  r2.Seed(77);
+  pf.cells[0] = WeatherCell{100.f, 100.f, 999.f, 0, 0.f, 0.f, 1.f, 0.f, 0.f, 7.f};
+  fr.now = 1000;
+  b.clear();
+  UpdateWeather(pf, fr, rng, b, (size_t)-1);
+  const float ey = (float)r2.RandMax(696), ez = (float)r2.RandMax(300);
+  assert(eq(pf.cells[0].y, ey) && eq(pf.cells[0].z, ez));
+  assert(b[0].y == (int)ey - 0x30);
+  assert(b[1].x - b[0].x == (int)((1.0 - (double)ez * 0.0008) * 16.0 + 0.5));
+
+  // past the bottom: y -= H+0x60, depth restored from z0 (single wrap step)
+  pf.cells[0] = WeatherCell{100.f, 700.f, 123.f, 0, 0.f, 0.f, 0.f, 0.f, 0.f, 7.f};
+  fr.now = 0;
+  b.clear();
+  UpdateWeather(pf, fr, rng, b, (size_t)-1);
+  assert(eq(pf.cells[0].y, 4.f) && eq(pf.cells[0].z, 7.f));
+
+  // past the top: y += H+0x60
+  pf.cells[0] = WeatherCell{100.f, -100.f, 0.f, 0, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+  b.clear();
+  UpdateWeather(pf, fr, rng, b, (size_t)-1);
+  assert(eq(pf.cells[0].y, 596.f));
+
+  // x wrap: out right -> -=W, out left -> +=W (one step each)
+  pf.cells[0] = WeatherCell{1050.f, 100.f, 0.f, 0, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+  b.clear();
+  UpdateWeather(pf, fr, rng, b, (size_t)-1);
+  assert(eq(pf.cells[0].x, 50.f));
+  pf.cells[0].x = -10.f;
+  b.clear();
+  UpdateWeather(pf, fr, rng, b, (size_t)-1);
+  assert(eq(pf.cells[0].x, 990.f));
+
+  // wind + camera parallax, depth-scaled: s = max((1000-z)*0.001, 0.5)
+  WeatherField af;
+  af.havePrevCam = true;  // prev 0, cam 300 -> dx=300, *0.1 = 30
+  af.prevCam[0] = 0;
+  af.cells.resize(1);
+  af.cells[0] = WeatherCell{100.f, 100.f, 0.f, 0, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+  int32_t cam[3] = {300, 0, 0};
+  fr.cam = cam;
+  b.clear();
+  UpdateWeather(af, fr, rng, b, (size_t)-1);
+  assert(eq(af.cells[0].x, 70.f));  // s=1: x -= (0 + 300*0.1) * 1
+  fr.cam = nullptr;
+
+  // phase wrap at 20*pi; sway = sin(p/2)+sin(p)+sin(p/10) at p=pi
+  pf.cells[0] = WeatherCell{100.f, 100.f, 0.f, 0, 0.f, 0.f, 0.f, 63.f, 0.f, 0.f};
+  b.clear();
+  UpdateWeather(pf, fr, rng, b, (size_t)-1);
+  assert(eq(pf.cells[0].phase, 0.168148f, 1e-5f));  // 63 - 62.831852
+  pf.cells[0].phase = 3.14159265f;
+  b.clear();
+  UpdateWeather(pf, fr, rng, b, (size_t)-1);
+  assert(b[0].x == 139);  // (int)(1.3090169 * 30 + 100)
+
+  // window-width scaling: >1279 count x1.5 (spawn), size x1.2/x1.5 (frame)
+  rng.Seed(5);
+  SpawnWeather(wf, 1, 1280, 600, 0, rng);
+  assert(wf.cells.size() == 249u);  // (int)(166 * 1.5)
+  pf.cells[0] = WeatherCell{100.f, 100.f, 0.f, 0, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+  fr.winW = 1280;
+  b.clear();
+  UpdateWeather(pf, fr, rng, b, (size_t)-1);
+  assert(b[1].x - b[0].x == 19);  // round(16*1.2)
+  fr.winW = 1920;
+  b.clear();
+  UpdateWeather(pf, fr, rng, b, (size_t)-1);
+  assert(b[1].x - b[0].x == 24);  // round(16*1.5)
+  fr.winW = 1000;
+
+  // batch cap -> resume index, camera delta cached across the split
+  WeatherField cf;
+  cf.havePrevCam = true;
+  cf.cells.assign(4, WeatherCell{0.f, 100.f, 0.f, 0, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f});
+  cf.prevCam[0] = 0;
+  int32_t cam2[3] = {100, 0, 0};
+  fr.cam = cam2;
+  b.clear();
+  assert(UpdateWeather(cf, fr, rng, b, 6) == 2);  // flush point at 2 cells
+  assert(b.size() == 6 && b[0].x == 990.f && b[3].x == 990.f);
+  b.clear();  // 0064c8a0: DrawIndexed + count = 0
+  assert(UpdateWeather(cf, fr, rng, b, 6, nullptr, 2) == 4);  // resume
+  assert(b.size() == 6 && b[0].x == 990.f && b[3].x == 990.f);  // dx cached once
+  fr.cam = nullptr;
+}
+
 int main() {
   // 16:9 target in a 4:3 window -> full width, letterbox top/bottom.
   render3d::Rect r = render3d::Letterbox(800, 600, 16.f / 9.f);
@@ -491,6 +630,7 @@ int main() {
   testSyntheticGrid();
   testScene();
   testProps();
+  testWeather();
 
   printf("render3d tests pass\n");
   return 0;

@@ -4,8 +4,9 @@
 //   --quad         : it5 indexed layout-B textured quad
 //   --obj P [--tex Q] : it6 layout-A .obj mesh with a .pcx texture
 //   --terrain      : it7 synthetic layout-B terrain grid (stand-in projection)
+//   --weather      : it11 004a7660 weather cells (snow particle field)
 //   --lake P       : it8 world-space lake terrain (DEPTHMAP -> layout-A mesh)
-// Usage: render3d_view [--frames N] [--quad] [--terrain] [--lake P]
+// Usage: render3d_view [--frames N] [--quad] [--terrain] [--weather] [--lake P]
 //                      [--obj P] [--tex Q] [--vert P] [--frag P]
 //        (default N=3; 0 = until quit. --vert/--frag default to the build-time
 //        .spv paths; --obj/--tex override the shaders to their it6 pair.)
@@ -27,7 +28,7 @@
 
 int main(int argc, char **argv) {
   int frames = 3;
-  bool useQuad = false, useTerrain = false;
+  bool useQuad = false, useTerrain = false, useWeather = false;
   const char *objPath = nullptr, *texPath = nullptr;
   const char *lakePath = nullptr;
   const char *vert = nullptr, *frag = nullptr;
@@ -35,6 +36,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--quad")) useQuad = true;
     else if (!strcmp(argv[i], "--terrain")) useTerrain = true;
+    else if (!strcmp(argv[i], "--weather")) useWeather = true;
     else if (!strcmp(argv[i], "--lake") && i + 1 < argc) lakePath = argv[++i];
     else if (!strcmp(argv[i], "--obj") && i + 1 < argc) objPath = argv[++i];
     else if (!strcmp(argv[i], "--tex") && i + 1 < argc) texPath = argv[++i];
@@ -42,7 +44,8 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--frag") && i + 1 < argc) frag = argv[++i];
   }
   const bool useScene = lakePath != nullptr;
-  const bool useMesh = objPath != nullptr && !useQuad && !useTerrain && !useScene;
+  const bool useMesh =
+      objPath != nullptr && !useQuad && !useTerrain && !useWeather && !useScene;
 
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     printf("GPU unavailable: SDL_Init failed (%s)\n", SDL_GetError());
@@ -71,12 +74,16 @@ int main(int argc, char **argv) {
   render3d::Quad quad;
   render3d::MeshGpu mesh;
   render3d::TerrainGpu terra;
+  render3d::WeatherField wfield;
+  std::vector<render3d::VertexB> wbatch;
+  game::MsvcRand wrng;
+  render3d::WeatherFrame wfr;
   bool ready = false;
 #ifdef RENDER3D_VERT_SPV
   if (useMesh || useScene) {
     if (!vert) vert = RENDER3D_MESH_VERT_SPV;
     if (!frag) frag = RENDER3D_MESH_FRAG_SPV;
-  } else if (useQuad || useTerrain) {
+  } else if (useQuad || useTerrain || useWeather) {
     if (!vert) vert = RENDER3D_QUAD_VERT_SPV;
     if (!frag) frag = RENDER3D_QUAD_FRAG_SPV;
   } else {
@@ -116,6 +123,18 @@ int main(int argc, char **argv) {
     auto verts = render3d::SyntheticGridVerts(G, G, r0.w, r0.h, &h);
     ready = vert && frag &&
             render3d::InitTerrain(gpu.dev, gpu.swapFmt, vert, frag, verts, terra);
+  } else if (useWeather) {
+    // it11: 004bce00 spawn + 004a7660 projection, 1:1; snow cells are rebuilt
+    // to layout-B triangles every frame (the original's dynamic-buffer path).
+    wrng.Seed(0xC0FFEEu);
+    wfr.winW = (int)r0.w;
+    wfr.winH = (int)r0.h;
+    render3d::SpawnWeather(wfield, 1, wfr.winW, wfr.winH, 0, wrng);
+    // UV scale table (+0x8cc): the checker stand-in is 64x64 (rain.pcx too).
+    static const int32_t kUvTab[1] = {64};
+    render3d::UpdateWeather(wfield, wfr, wrng, wbatch, (size_t)-1, kUvTab);
+    ready = vert && frag &&
+            render3d::InitTerrain(gpu.dev, gpu.swapFmt, vert, frag, wbatch, terra);
   } else if (useMesh)
     ready = vert && frag &&
             render3d::InitMesh(gpu.dev, gpu.swapFmt, vert, frag, objPath, texPath, mesh);
@@ -125,6 +144,7 @@ int main(int argc, char **argv) {
     ready = vert && frag && render3d::InitTriangle(gpu.dev, gpu.swapFmt, vert, frag, tri);
   const char *what = useScene   ? "scene"
                      : useTerrain ? "terrain"
+                     : useWeather ? "weather"
                      : useMesh  ? "mesh"
                      : useQuad  ? "quad"
                                 : "triangle";
@@ -158,6 +178,22 @@ int main(int argc, char **argv) {
           gpu.PushVertexUniform(vp.m, sizeof vp.m);
           d = render3d::Draw{mesh.pipe, mesh.vb, nullptr, mesh.tex, mesh.sampler,
                              mesh.vertexCount};
+        } else if (useWeather) {
+          wfr.now += 50;  // 20 fps tick in ms; dt feeds the cell integrator
+          wfr.winW = (int)r.w;
+          wfr.winH = (int)r.h;
+          wbatch.clear();
+          static const int32_t kUvTab[1] = {64};
+          render3d::UpdateWeather(wfield, wfr, wrng, wbatch, (size_t)-1, kUvTab);
+          SDL_ReleaseGPUBuffer(gpu.dev, terra.vb);
+          terra.vb = render3d::UploadBuffer(
+              gpu.dev, SDL_GPU_BUFFERUSAGE_VERTEX, wbatch.data(),
+              (Uint32)(wbatch.size() * sizeof(render3d::VertexB)));
+          terra.vertexCount = (Uint32)wbatch.size();
+          float vp[2] = {r.w, r.h};
+          gpu.PushVertexUniform(vp, sizeof vp);
+          d = render3d::Draw{terra.pipe, terra.vb, nullptr, terra.tex,
+                             terra.sampler, terra.vertexCount};
         } else if (useTerrain) {
           float vp[2] = {r.w, r.h};
           gpu.PushVertexUniform(vp, sizeof vp);

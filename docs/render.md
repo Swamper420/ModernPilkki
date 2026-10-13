@@ -392,14 +392,14 @@ and `7c8b7c` (viewport height).
 
 ---
 
-## 8. Terrain path (CPU-projected grid)
+## 8. CPU-projected cell path (weather particles + shared layout-B batcher)
 
 Verified chain:
 
 ```
-004a7660   per frame: walk depth grid (world+0x151b4 cells, size 0x15248 array),
-           compute screen/UV/depth/alpha per cell vertex into mesh+0xd6c+0x374
-           (12-byte entries), fill cell index quads, call 0040e5b0 + 0040bb60
+004a7660   per frame: walk the weather cell array (world+0x15234 records, 10
+           slots x 0x28, count +0x151b4), advance/project each cell, write the
+           3 scratch verts into mesh+0xd6c+0x374, call 0040e5b0 + 0040bb60
 0040e5b0   per cell: FUN_0040e260 or 0040ac60 for the 3/4 body indices
 0040e260   takes 3 grid vertices (i0,i1,i2) from +0xd6c+0x374, computes a
            back-face normal in fixed point, rejects near-degenerate/steep cells,
@@ -411,12 +411,13 @@ Verified chain:
 0064c8a0   flush batch → 00648f60 (DrawIndexed) → back to 006489c0 state
 ```
 
-So the lake floor is **not** a static mesh: world vertices are generated from the
-DEPTHMAP grid every frame, classified into depth bands, and rasterised as
-screen/world-projected layout-B triangles (VS `0074dce8`/`0074eec0`). The
-`DAT_006d0590`/`006d05b8` tests in `0040e260` cull cells whose normal is too
-steep; `004a7660` additionally clamps vertices into the viewport
-(`0061ec90`/`0061ecc0`).
+`004a7660` is NOT the lake floor: it is the snow/rain particle field (§8.6,
+ported it11). The earlier "the lake floor is generated from the DEPTHMAP grid
+each frame" reading is corrected: the depth grid feeds the layout-A water/bed
+mesh instead (`world+0x1eeb0` built in `004b18e0`, drawn by `004a67b0`/
+`004a84a0` -- that pass is still open). `0040e260`'s cull and `006487f0`'s
+append are shared by both callers; `004a7660` clamps/wraps vertices with
+`0061ec90`/`0061ecc0` (window h/w).
 
 ### 8.1 Cell record + cull (ported: `src/render3d_terrain.hpp`)
 
@@ -455,8 +456,9 @@ finite-difference normals, uv measured against the padded texture width) plus a
 water-ramp texture (`BuildTerrainTex`, row pitch padded to a 256-byte multiple
 for the Vulkan copy), drawn with a clean-room look-at + perspective (`ViewProj`,
 NDC y-up, clip z 0..1). This is the standard GPU shape and reuses the layout-A
-mesh pipeline; it exists so the lake can be seen in 3D before the exact CPU
-projection is decompiled.
+mesh pipeline; it exists so the lake can be seen in 3D (the "exact CPU
+projection" it stood in for, `004a7660`, turned out to be the weather field,
+§8.6; the bed/water-surface pass `004a67b0`/`004a84a0` remains open).
 
 ### 8.4 In-game bridge (`src/render3d_bridge.hpp`, `pilkki --3d`)
 
@@ -496,6 +498,65 @@ instead of one per instance.
   by the new `depthFmt` argument on `InitMeshVerts`; terrain and props share it
   so objects occlude correctly. Depthless callers (`render3d_view`, the it6
   mesh) keep the default `SDL_GPU_TEXTUREFORMAT_INVALID`.
+
+### 8.6 Weather cell field (ported: it11, `src/render3d_terrain.hpp`)
+
+`004a7660` + spawner `004bce00`, decompiled in scratch (`terr.c`, `proj.c`).
+The field lives in the world object: count `+0x151b4`, records at `+0x15234`,
+10 slots x `0x28` (`004a7660` indexes cells from `+0x15248`, i.e. slot -5):
+
+| slot | field | spawn (`004bce00`) | use |
+|---|---|---|---|
+| `+0x00` | x | `rand30(winW)` | screen x; one-step wrap into `[0, winW]` |
+| `+0x04` | y | `rand30(winH+0x60)` | screen y; top wrap `+H+0x60` if `y < -48`, bottom wrap `-H-0x60` + `z=z0` |
+| `+0x08` | z | `rand30(500)` | life-depth 0..1000, `+= dt*0.2`, clamped; `>=1000` re-rolls `y=rand(H+0x60)`, `z=rand(300)` |
+| `+0x0c` | ts | `now` (`7c695c`) | int ms; `dt = (float)(now - ts)` |
+| `+0x10` | vx | `0.0` | x drift px/ms |
+| `+0x14` | vy | `winH * 1/1800` | fall px/ms, scaled by depth factor `s` |
+| `+0x18` | vz | `0.2` | life rate |
+| `+0x1c` | phase | `rand30(600) * 0.01` | sway phase rad; if `> 62.831853` subtract `62.831852f` |
+| `+0x20` | phaseVel | `6.2831802f / (rand30(1000) + 3000.0f)` | rad/ms (~1 cycle / 3-4 s) |
+| `+0x24` | z0 | `= z` | depth restored on the bottom wrap |
+
+Per frame (`s = max((1000-z)*0.001, 0.5)`):
+
+```
+x += dt*vx;  z = min(z + dt*vz, 1000);  phase += dt*phaseVel (wrapped);
+y += dt*vy*s;  ts = now;
+x -= ((float)windX*dt + camdx*0.1) * s          // wind +0x1ee88, cam dx world+0x28b84 +0x64
+y  = (y - ((float)windY*dt + camdy*0.1) * s) + camdz*0.1*s   // +0x1ee90 / +0x68 / +0x6c
+wrap x on winW (0061ecc0, window +0x1c), y on winH+0x60 (0061ec90, +0x20)
+X = (int)((sin(p/2) + sin(p) + sin(p/10)) * (1 - zoom) * 30.0 + x)  // zoom +0x1ee98
+Y = (int)y - 0x30;  w = (int)((1 - z*0.0008) * size + 0.5)
+scratch verts: (X, Y), (X+w, Y), (X, Y+w)   // z components stay 0 (set by spawner)
+0040e5b0(face{0,1,2}, material 0 = rain.pcx, uv (2,2)-(0x30,2)-(2,0x30), flags=1 skip-cull)
+```
+
+`size` = `16.0` (`DAT_006dc680`) scaled by window width: x1.2 `> 0x4ff`
+(`0061f2e0`), x1.5 `> 0x77f` (`0061f260`). Spawner counts: id 1 -> 166, id 2
+-> 500, x1.5 when `W > 0x4ff`, clamp 1000; weather *changes* ramp the count
+over 30 s (`00650fe0`, `param_3 != 0`) -- not ported (jump). Wind/zoom come
+from `004c02d0` (wind-speed tables at `006dbb20..`/`006dba80..`, per weather
+dir/mode) -- inputs are exposed, tables not ported. Camera fields +0x1ee88/90
+are `double`; the sway sines go through the x87 `_CIsin` guard (`0067d495` +
+`00686210`): the port uses stdlib `sin()` (result truncates to int).
+`(&DAT_00777a20)` dt-correction table is all `0.0` -- a no-op.
+
+Twin: `004a7b70` (called from `004841e0`, size `36.0`/`DAT_006db140`) is the
+menu-screen variant -- same cells, perspective y-clamp toward the horizon
+(`(H+0x60)*(1 - z*0.0001)`, `DAT_006d0540`), width scale `0.001` (vs `0.0008`)
+and the re-roll gated on the fall direction. UNVERIFIED which screen hosts it.
+Verified callers: `004a7660` from `004a5d00` (world pass, scratch `terr.c`),
+`004bce00` from `004b18e0` (ctor), `004bb1a8` (clear), `004bc604`,
+`0x438d70`/`0x439156`/`0x43bdee` (mode machine) and `004c02d0`.
+
+`render3d_view --weather` draws it: spawn type 1, `UpdateWeather` per frame,
+layout-B batch rebuilt into the it7 terrain pipeline (per-frame
+`UploadBuffer` = the original's dynamic buffer + `0064c8a0` flush). The
+`+0x8cc` UV scale table is unknown for the weather mesh, so the pass takes it
+as a parameter (`nullptr` = 1.0; viewer/check use 64 for the checkerboard).
+Deviation: `006487f0`'s batch colour (`param_7[0..2]` -> `7c9c20`, fog-tinted)
+is not modelled; alpha is passed as the existing `alpha` vertex channel.
 
 ---
 
@@ -546,7 +607,7 @@ rasterizer `7c8c48` (no cull) and depth-state variants for alpha/ghost.
 | `DAT_006d0524` | f32 | `1/255` | byte colour → float |
 | `DAT_006d0528` | f32 | `1/180` | model scale (world units→engine) |
 | `DAT_006d0534` | f32 | `π/180` | degrees→radians (rot) |
-| `DAT_006d0548` | f32 | `0.001` | UV/pos epsilon |
+| `DAT_006d0548` | f64 | `0.001` | `004a7b70` weather width vs depth (menu variant) |
 | `DAT_006d051c` | f32 | `0.001` | ripple epsilon |
 | `DAT_006d0530` | f32 | `1/63` | packed-RGB green step (`0040ac60`) |
 | `DAT_006d053c` | f32 | `1/31` | packed-RGB red/blue step |
@@ -556,8 +617,20 @@ rasterizer `7c8c48` (no cull) and depth-state variants for alpha/ghost.
 | `DAT_006dc5c8` | f64 | `0.0025` | line-dot spacing |
 | `DAT_006dc6b0` | f64 | `400.0` | line-dot count scale |
 | `DAT_006d9f88` | f64 | `0.4` | pause fade scale |
-| `DAT_006dc668` | f64 | `1.2` | pause vertical scale |
-| `DAT_006d1638` | f64 | `1.5` | pause vertical scale (alt) |
+| `DAT_006dc668` | f64 | `1.2` | weather size x1.2, win w>1279 (`004a7660`) |
+| `DAT_006d1638` | f64 | `1.5` | weather size x1.5 (w>1919); spawn count x1.5 (w>1279) |
+| `DAT_006d05ac` | f32 | `1000.0` | weather life-depth cap / re-roll gate |
+| `DAT_006d0870` | f32 | `1/1800` | weather fall speed, px per ms per screen px |
+| `DAT_006d052c` | f32 | `0.01` | weather phase spawn scale |
+| `DAT_006dc6c0` | f32 | `2*pi` | weather phaseVel numerator |
+| `DAT_006dc710` | f32 | `3000.0` | weather phaseVel denominator bias |
+| `DAT_006dc698` | f64 | `20*pi` | weather phase wrap threshold |
+| `DAT_006dc6f4` | f32 | `20*pi` | weather phase wrap subtractand |
+| `DAT_006dc5c0` | f64 | `0.0008` | weather triangle width vs depth |
+| `DAT_006dc778` | f32 | `-48.0` | weather top-wrap gate |
+| `DAT_006dc680` | f64 | `16.0` | weather triangle size (`004a5d00` caller arg) |
+| `DAT_006d0540` | f64 | `0.0001` | menu weather horizon clamp (`004a7b70`) |
+| `DAT_006db140` | f64 | `36.0` | menu weather triangle size (`004841e0` caller arg) |
 | `DAT_006d06b4` | f32 | `0.2` | ripple/weed scale |
 | `DAT_006db098` | f32 | `0.4` | echo strip offset |
 | `DAT_006d9f08` | f32 | `0.6` | echo strip offset |
@@ -690,8 +763,8 @@ dynamic node, `0064ce70` maps it, `0064c610` releases.
 src/render3d.hpp      Ctx, resource pool, state mirrors, draw wrappers
 src/render3d.cpp      pipeline init (0064a790/0064ebb0), wrappers
 src/render3d_shaders  re-authored HLSL/GLSL + input layout tables
-src/render3d_terrain.hpp  0040e260/006487f0 cell cull + append (it7; 004a7660
-                          projection still open)
+src/render3d_terrain.hpp  0040e260/006487f0 cell cull + append (it7); 004bce00
+                          spawn + 004a7660 weather projection (it11, §8.6)
 src/render3d_camera.hpp   00650910/0064f470 CB0+CB1 packing (it7)
 src/render3d_scene.hpp    DEPTHMAP -> layout-A terrain mesh + camera (it8 stand-in)
 src/render3d_bridge.hpp   offscreen GPU scene -> SDL_Texture PLAY bg (it9)
@@ -721,12 +794,16 @@ Wire into `main.cpp` after the scene draws in the mode-0x14 path.
 * `006487f0` batch capacity (`DAT_007a6bb8`) is a runtime dynamic-buffer size,
   not a PE constant; the flush/return-code semantics are **resolved** (it7, §8.1)
   -> ported with the capacity as a parameter.
-* `004a7660` per-frame projection (still open): the terrain cell array at
-  `world+0x15248` (10 floats/cell), its initialiser, the frame delta
-  `DAT_007c695c` / `(&DAT_00777a20)` trick, and the camera fields at
-  `+0x1ee88/90/98`. The screen-position clamp uses `0061ec90/ecc0` (win w/h)
-  and `0059db20`; the `0067d495` x87 calls are an unresolved trig/normalise pair.
-  The integer cell **cull + append are ported** (§8.1) from the projected output.
+* `004a7660` per-frame projection: **resolved** (it11) -> it is the weather
+  cell field (§8.6), not the terrain depth grid. Cell block `world+0x15234`
+  (10 slots x 0x28, count `+0x151b4`), spawner `004bce00`, frame delta
+  `DAT_007c695c` (the `(&DAT_00777a20)` table is all zero -> no-op), camera
+  delta via `world+0x28b84` -> `+0x64/0x68/0x6c`, wind/zoom `+0x1ee88/90/98`
+  set by `004c02d0` (speed tables not yet ported). `0059db20` = `rand30(n)`
+  (already `game::MsvcRand::RandMax`); the `0067d495` x87 calls are the MSVC
+  `_CIsin` range-guard -> stdlib `sin()` in the port (truncated to int anyway).
+  Open: the bed/water-surface generation pass (`004a67b0`/`004a84a0`,
+  mesh `world+0x1eeb0`) and the `004841e0` caller context of `004a7b70`.
 * Water surface / sky: `0064a5f0` clears the depth buffer mid-frame; the actual
   water shader selection between PS `7c8bb8` and `7c8bbc` and the per-water
   constants are open.
