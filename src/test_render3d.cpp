@@ -1,12 +1,87 @@
-// Smallest assert: letterbox math (aspect preserved/centered/degenerate) and
-// the clear-grey factor. No SDL window or GPU device needed.
+// Smallest assert: letterbox math (aspect preserved/centered/degenerate), the
+// clear-grey factor, and the iteration-2 4x4 matrix math (render3d_math.hpp).
+// No SDL window or GPU device needed.
 #include <cassert>
 #include <cmath>
 #include <cstdio>
 
 #include "render3d.hpp"
+#include "render3d_math.hpp"
 
 static bool eq(float a, float b) { return fabsf(a - b) < 1e-4f; }
+
+// Mat4 compare. The original's mul sums terms in compiler-scheduled order; our
+// natural k=0..3 order can differ in the last float bit, hence the epsilon.
+static bool meq(const render3d::Mat4& a, const render3d::Mat4& b,
+                float eps = 1e-5f) {
+  for (int i = 0; i < 16; ++i)
+    if (fabsf(a.m[i] - b.m[i]) > eps) return false;
+  return true;
+}
+
+static void testMatrixMath() {
+  using render3d::Mat4;
+  using render3d::Identity;
+
+  // Identity is neutral for Mul (00598dc0).
+  Mat4 I = Identity();
+  assert(meq(render3d::Mul(I, I), I));
+
+  // Translation composes additively for row-vector matrices: T(a)*T(b)=T(a+b).
+  Mat4 T1 = render3d::MatTranslate(1, 2, 3);
+  Mat4 T2 = render3d::MatTranslate(4, 5, 6);
+  assert(meq(render3d::Mul(T1, T2), render3d::MatTranslate(5, 7, 9)));
+  // Translation lives in the last ROW (row-vector convention).
+  assert(eq(T1.m[12], 1) && eq(T1.m[13], 2) && eq(T1.m[14], 3) &&
+         eq(T1.m[3], 0) && eq(T1.m[7], 0) && eq(T1.m[11], 0));
+
+  // Mul4/Mul5 are left-to-right chains (00598860/00598460 operation order).
+  Mat4 A = render3d::MatTranslate(1, 2, 3);
+  Mat4 B = render3d::WorldMatrix(0, 0, 0, 0, 0, 90);  // M5 = Rz(-90)
+  Mat4 C = render3d::MatTranslate(0, 1, 0);
+  Mat4 D = render3d::WorldMatrix(0, 0, 0, 0, 90, 0);  // M3 = Rx(-90)
+  assert(meq(render3d::Mul4(A, B, C, D),
+             render3d::Mul(render3d::Mul(render3d::Mul(A, B), C), D)));
+  assert(meq(render3d::Mul5(A, B, C, D, I),
+             render3d::Mul(render3d::Mul4(A, B, C, D), I)));
+
+  // Multiplication is NOT commutative.
+  Mat4 AB = render3d::Mul(A, B);
+  Mat4 BA = render3d::Mul(B, A);
+  assert(!meq(AB, BA));
+
+  // Transpose (00650380) is an involution and moves translation row -> column.
+  Mat4 M = render3d::WorldMatrix(1, 2, 3, 10, 20, 30);
+  assert(meq(render3d::Transpose(render3d::Transpose(M)), M));
+  Mat4 Mt = render3d::Transpose(render3d::MatTranslate(1, 2, 3));
+  assert(eq(Mt.m[3], 1) && eq(Mt.m[7], 2) && eq(Mt.m[11], 3) &&
+         eq(Mt.m[12], 0) && eq(Mt.m[13], 0) && eq(Mt.m[14], 0));
+
+  // Constants (DAT_006d0528 / DAT_006d0534).
+  assert(eq(render3d::kModelScale, 1.0f / 180.0f));
+  assert(fabsf(render3d::kDeg2Rad - 0.017453292f) < 1e-8f);
+
+  // 00599d40, zero rotation -> pure translation (mode 0 and mode 1).
+  Mat4 W0 = render3d::WorldMatrix(1, 2, 3, 0, 0, 0, 0);
+  assert(meq(W0, render3d::MatTranslate(1, 2, 3)));
+  assert(meq(render3d::WorldMatrix(1, 2, 3, 0, 0, 0, 1),
+             render3d::MatTranslate(1, 2, 3)));
+
+  // 00599d40 sample, hand-derived from the decompile:
+  //   pos=(1,2,3), rx=90, ry=rz=0, mode 0 -> M5*M4*M3*M2, M5=M3=I,
+  //   M4 = Ry(90) = [0,0,-1,0; 0,1,0,0; 1,0,0,0; 0,0,0,1], so out = M4*T.
+  Mat4 exp{{0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 2, 3, 1}};
+  assert(meq(render3d::WorldMatrix(1, 2, 3, 90, 0, 0, 0), exp));
+
+  // Same sample about rz=90 -> M5 = Rz(-90) = [0,-1,0,0; 1,0,0,0; ...], out=M5*T.
+  Mat4 expz{{0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 2, 3, 1}};
+  assert(meq(render3d::WorldMatrix(1, 2, 3, 0, 0, 90, 0), expz));
+
+  // Parent matrix is left-multiplied into the chain (00598460 path).
+  Mat4 P = render3d::MatTranslate(10, 0, 0);
+  assert(meq(render3d::WorldMatrix(1, 2, 3, 90, 0, 0, 0, &P),
+             render3d::Mul(P, render3d::WorldMatrix(1, 2, 3, 90, 0, 0, 0))));
+}
 
 int main() {
   // 16:9 target in a 4:3 window -> full width, letterbox top/bottom.
@@ -36,6 +111,8 @@ int main() {
   assert(eq(r.w, 0) && eq(r.h, 0));
 
   assert(eq(render3d::ClearGrey(), 0.75f));
+
+  testMatrixMath();
 
   printf("render3d tests pass\n");
   return 0;
