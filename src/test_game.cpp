@@ -99,6 +99,9 @@ int main() {
     g.Seed(1);
     g.SetLake(&d, nullptr);
     double x0 = g.x, y0 = g.y;
+    // Target (x0+2000 = 4400) is past the walkable bound 4200: the
+    // original accepts it (0047f530 rejects only negative coords) and
+    // the walk is stopped by the walk grid, never rejected (sim-walk 1).
     g.Click(x0 + 2000, y0);  // due east, past min click distance 1500
     input::Keys k;
     g.Update(k, 0.5f);  // 500 ms * 0.34 = 170 units
@@ -109,7 +112,7 @@ int main() {
     g2.Seed(1);
     g2.SetLake(&d, nullptr);
     double xa = g2.x;
-    g2.Click(g2.x + 4000, g2.y);
+    g2.Click(g2.x + 4000, g2.y);  // OOB target accepted (0047f530)
     input::Keys ke;
     tick::Slices(2500, [&](uint32_t ms) { g2.Update(ke, ms / 1000.f); });
     assert(std::fabs(g2.x - (xa + 0.34 * 2500.0)) < 1e-6);
@@ -166,6 +169,12 @@ int main() {
     assert(g.holes[0].open && g.holes[0].landCount == 0);
     assert((g.holes[0].id >> 16) == 36);  // cellIdx at spawn (4,4), w=8
     assert((g.holes[0].id & 0xffff) == 0);
+    // 00477880 puts the session in line stage 0x25 when the line goes
+    // out; the at-hole pose 0x1e follows on the next slice (timeline
+    // hop), so the mode here is 0x25, not 0x1e (was masked by the old
+    // line-105 abort).
+    assert(g.Mode() == game::kModeLineStage);
+    g.Update(k, 0.016f);
     assert(g.Mode() == game::kModeAtHoleA);  // 0x1e at-hole pose
     assert(g.LineOut() && g.AtHole());
     // Reel-in: walk away -> line in, mode 5 again.
@@ -260,7 +269,9 @@ int main() {
     g.Click(g.x - 2000, g.y);  // start a long walk
     g.Update(k, 0.016f);
     double xm = g.x;
-    g.Click(xm - 100, g.y);  // 100 units away, not arrived: ignored
+    // Small click clear of the 300-unit hole snap ring (004aeee0) so it
+    // hits the 1500-unit minimum-click gate (00799154) and is ignored.
+    g.Click(xm - 100, g.y - 300);
     g.Update(k, 0.016f);
     assert(g.x < xm - 5.0);  // kept walking to the old target
     g.Click(hx, hy);          // click on the hole: snap + walk

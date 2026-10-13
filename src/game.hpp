@@ -31,6 +31,7 @@
 
 #include "input.hpp"
 #include "ves.hpp"
+#include "walkgrid.hpp"
 
 namespace game {
 
@@ -275,9 +276,13 @@ struct Game {
     return (float)kDepthTable[std::min(16, c * 17 / 256)];
   }
 
-  // 004af230 walkability. Bounds from the cell grid stand in for the lake
-  // walk grid (lake+0x15168 corner bit 0x10) until that structure is
-  // parsed (delta 3 open); in-bounds is always walkable today.
+  // 004af230 walkability. The world ends at (w-1)*600 x (h-1)*600: those
+  // extents are what the original's grid builder records at lake
+  // +0x15160/+0x15164 (004b8b20). The per-corner mask rule (bit 0x10 =
+  // passable corner) is ported in walkgrid.hpp; until the corner bytes
+  // are loaded from the lake this bounds check is the all-passable
+  // stand-in (mask 15 inside the grid), which is what makes Step stop at
+  // the wall.
   bool Walkable(double wx, double wy) const {
     double mx = (GridW() - 1) * kCell, my = (GridH() - 1) * kCell;
     return wx >= 0 && wy >= 0 && wx <= mx && wy <= my;
@@ -372,37 +377,43 @@ struct Game {
     lineDepth = kLineM[slot];
   }
 
-  // 0047f530/00476c00 click-to-move order (delta 2). Clicks closer than
-  // 1500 units are ignored unless already arrived (+0x698); a click on a
-  // hole snaps to the 90-unit stand-off point and toggles the at-hole
-  // pose (0x1e <-> 0x1f).
+  // 0047f530/00476c00 click-to-move order (delta 2, docs/sim-walk.md).
+  // Verified verdict: an out-of-bounds click (x,y >= 0) is ACCEPTED at
+  // order entry -- 0047f530 rejects only negative coordinates and
+  // 004b0bb0 checks obstacles/holes, not grid bounds -- never clamped;
+  // the walk grid then stops the walker mid-walk (Step keeps the last
+  // legal step). Clicks closer than 1500 units (00799154) are ignored
+  // unless already arrived (+0x698); a click near an open hole snaps to
+  // the 90-unit stand-off point (00476c00) and toggles the at-hole pose
+  // (0x1e <-> 0x1f).
   void Click(double wx, double wy) {
-    double dx = wx - x, dy = wy - y, d2 = dx * dx + dy * dy;
     Hole *h = NearestOpenHole(wx, wy, kHoleSnap);  // 004aeee0 (90000 sq)
-    if (!h && d2 < kMinClickDist * kMinClickDist && !arrived_) return;
+    walkgrid::HoleView hv;
+    const walkgrid::HoleView *hp = nullptr;
     if (h) {
+      hv.x = h->x;
+      hv.y = h->y;
+      hv.busy = false;  // record +0x10 (004af1b0) unported on Hole
+      hp = &hv;
+    }
+    walkgrid::ClickOrder o = walkgrid::Decide(wx, wy, x, y, arrived_,
+                                              kMinClickDist, hp, -dirX_, -dirY_);
+    if (o.kind == walkgrid::kReject) return;
+    if (o.kind == walkgrid::kHoleSnap) {
       atHoleTarget_ = true;  // +0x4bc
       if (mode_ == kModeAtHoleA)
         mode_ = kModeAtHoleB;  // 00476c00 pose toggle 0x1e <-> 0x1f
       else if (mode_ == kModeAtHoleB)
         mode_ = kModeAtHoleA;
-      double ux = h->x - x, uy = h->y - y;
-      double ul = std::sqrt(ux * ux + uy * uy);
-      if (ul < 1e-9) {  // standing on the hole: use current dir
-        ux = -dirX_;
-        uy = -dirY_;
-        ul = 1.0;
-      }
-      walkX_ = h->x - ux / ul * kStandOff;  // hole + unit * (-90)
-      walkY_ = h->y - uy / ul * kStandOff;
+      walkX_ = o.tx;
+      walkY_ = o.ty;
       walking_ = true;
       arrived_ = false;
       return;
     }
-    if (!Walkable(wx, wy)) return;  // 004b0bb0 route check (bounds stand-in)
     atHoleTarget_ = false;
-    walkX_ = wx;
-    walkY_ = wy;
+    walkX_ = o.tx;
+    walkY_ = o.ty;
     walking_ = true;
     arrived_ = false;
   }
@@ -575,13 +586,21 @@ struct Game {
 
   void WalkStepToTarget(double ms) {
     double dx = walkX_ - x, dy = walkY_ - y, d2 = dx * dx + dy * dy;
+    // The original advances the walk every slice (004770a0) and treats
+    // arrival as an after-the-fact flag (0047f740: +0x698 at 600 sq);
+    // stepping first closes onto the snap/stand-off point instead of
+    // freezing one arrival-radius short of it.
+    double l = std::sqrt(d2);
+    if (l > 1e-9) {
+      Step(dx / l, dy / l, ms);
+      dx = walkX_ - x;
+      dy = walkY_ - y;
+      d2 = dx * dx + dy * dy;
+    }
     if (d2 <= kArriveSq) {  // 006da068 arrival radius 600
       arrived_ = true;
       walking_ = false;
-      return;
     }
-    double l = std::sqrt(d2);
-    Step(dx / l, dy / l, ms);
   }
 
   // 00480820-driven mode chain: drill 6 -> hole 0x13 -> bore 0x18 ->
