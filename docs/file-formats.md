@@ -25,9 +25,13 @@ hash instead. Unknown sections skipped by embedded length (`len + 4` —
 skip covers payload + trailer).
 
 OBJECT_POSITIONS payload: `u32 ngroups`, then groups: `u32 nitems` +
-`nitems` × 25-byte records (`u8 flag(0) | u8 class | u16 pad |
-i32 x | i32 y | i32 z | u64 tail`). x/y = 8.24 fixed world units
-(±128, verified 290431/290431 in range); z small int 0..3750; loader
+`nitems` × 25-byte records (`u8 flag(0) | u8 class | u8[3] pad |
+i32 x | i32 y | i32 z | u64 tail`). Loader `FUN_004b6d70` reads x/y/z at
+byte offsets 5/9/13 and stores them RAW (no fixed-point shift): they are
+game units (600 per grid cell, `game::kCell`) spanning `0..600*GridW`
+(earlier "8.24 fixed /2^24" notes are wrong -- that maps every object into
+the middle <1% of the frame; `render.hpp DrawObjects` still has this bug,
+`render3d_objects.hpp` maps correctly). z small int 0..3750; loader
 splits tail u64 into 3×i16. Groups are mixed-class batches (semantics
 open). Exact-consume 48/48 lakes (`tools/objpos.py`: 290431 items,
 54 classes), C++ port `ves::ParseObjPos` (`src/ves.hpp`).

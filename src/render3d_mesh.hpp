@@ -19,6 +19,24 @@
 
 namespace render3d {
 
+// Largest bbox axis of an .obj in its own (world) units. BuildMeshA divides by
+// this, so a baked instance restores real size by multiplying back by it.
+inline float MeshExtent(const obj::Model& m) {
+  if (m.verts.empty()) return 0.f;
+  float mn[3] = {1e30f, 1e30f, 1e30f}, mx[3] = {-1e30f, -1e30f, -1e30f};
+  for (const auto& v : m.verts) {
+    const float p[3] = {(float)v.x, (float)v.y, (float)v.z};
+    for (int k = 0; k < 3; ++k) {
+      if (p[k] < mn[k]) mn[k] = p[k];
+      if (p[k] > mx[k]) mx[k] = p[k];
+    }
+  }
+  float ext = mx[0] - mn[0];
+  if (mx[1] - mn[1] > ext) ext = mx[1] - mn[1];
+  if (mx[2] - mn[2] > ext) ext = mx[2] - mn[2];
+  return ext;
+}
+
 inline std::vector<VertexA> BuildMeshA(const obj::Model& m, float texW,
                                        float texH) {
   std::vector<VertexA> out;

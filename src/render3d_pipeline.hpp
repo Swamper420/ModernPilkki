@@ -12,9 +12,12 @@
 
 #include <SDL3/SDL_gpu.h>
 
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <dirent.h>
+#include <string>
 #include <vector>
 
 #include "render3d_layout.hpp"
@@ -24,10 +27,49 @@
 
 namespace render3d {
 
-// Whole-file read for assets (.obj/.pcx); empty on failure.
+// Depth format for the world pass (it10): objects and terrain occlude correctly.
+inline constexpr SDL_GPUTextureFormat kDepthFmt = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
+
+// Original asset paths are Windows-style and keep the author's casing
+// (`gfx\txt\misc\d_col.pcx` vs the shipped `D_col.pcx`). Normalise the
+// separators, then resolve case by scanning the directory.
+inline std::string NormPath(const std::string& p) {
+  std::string o = p;
+  for (auto& c : o)
+    if (c == '\\') c = '/';
+  return o;
+}
+
+inline std::string ResolveCase(const std::string& path) {
+  if (FILE* f = fopen(path.c_str(), "rb")) {
+    fclose(f);
+    return path;
+  }
+  const size_t slash = path.find_last_of('/');
+  const std::string dir = slash == std::string::npos ? "." : path.substr(0, slash);
+  std::string base = slash == std::string::npos ? path : path.substr(slash + 1);
+  for (auto& c : base) c = (char)tolower((unsigned char)c);
+  DIR* d = opendir(dir.c_str());
+  if (!d) return path;
+  std::string found = path;
+  for (dirent* e; (e = readdir(d));) {
+    std::string n = e->d_name, ln = n;
+    for (auto& c : ln) c = (char)tolower((unsigned char)c);
+    if (ln == base) {
+      found = dir + "/" + n;
+      break;
+    }
+  }
+  closedir(d);
+  return found;
+}
+
+// Whole-file read for assets (.obj/.pcx); empty on failure. Case-insensitive
+// fallback so the original's mixed-case asset names still open on Linux.
 inline std::vector<uint8_t> ReadWholeFile(const char* path) {
   std::vector<uint8_t> out;
-  FILE* f = fopen(path, "rb");
+  const std::string p = ResolveCase(NormPath(path));
+  FILE* f = fopen(p.c_str(), "rb");
   if (!f) return out;
   fseek(f, 0, SEEK_END);
   long n = ftell(f);
@@ -38,6 +80,44 @@ inline std::vector<uint8_t> ReadWholeFile(const char* path) {
   }
   fclose(f);
   return out;
+}
+
+// .pcx -> tightly-packed RGBA8. Returns false (and clears rgba) on any failure.
+inline bool DecodePcxRgba(const char* path, Uint32& w, Uint32& h,
+                          std::vector<uint8_t>& rgba) {
+  rgba.clear();
+  w = h = 0;
+  try {
+    pcx::Image im = pcx::Decode(ReadWholeFile(path));
+    w = (Uint32)im.w;
+    h = (Uint32)im.h;
+    size_t n = (size_t)im.w * im.h;
+    rgba.resize(n * 4);
+    for (size_t i = 0; i < n; ++i) {
+      uint8_t r, g, b, a = 255;
+      if (im.planes == 1) {
+        uint8_t k = im.idx[i];
+        r = im.pal[3 * k];
+        g = im.pal[3 * k + 1];
+        b = im.pal[3 * k + 2];
+      } else {
+        size_t o = i * (im.planes == 3 ? 3 : 4);
+        r = im.px[o];
+        g = im.px[o + 1];
+        b = im.px[o + 2];
+        if (im.planes == 4) a = im.px[o + 3];
+      }
+      rgba[4 * i] = r;
+      rgba[4 * i + 1] = g;
+      rgba[4 * i + 2] = b;
+      rgba[4 * i + 3] = a;
+    }
+    return true;
+  } catch (const std::exception&) {
+    w = h = 0;
+    rgba.clear();
+    return false;
+  }
 }
 
 // Nearest/clamp sampler -- a stand-in; the original's 4 sampler objects
@@ -359,10 +439,15 @@ inline void ReleaseMesh(SDL_GPUDevice* dev, MeshGpu& m);
 
 // Creates the layout-A pipeline and uploads a ready-made vertex list + RGBA
 // texture (fallback: checker). Shared by the .obj path and the terrain scene.
+// `depthFmt` (non-INVALID) enables depth test/write for scenes that need
+// occlusion (the bridge's world pass); the default keeps the old 2D-ish passes
+// depthless so their render targets stay unchanged.
 inline bool InitMeshVerts(SDL_GPUDevice* dev, SDL_GPUTextureFormat fmt,
                           const char* vertSpv, const char* fragSpv,
                           std::vector<VertexA> verts, std::vector<uint8_t> rgba,
-                          Uint32 tw, Uint32 th, MeshGpu& m) {
+                          Uint32 tw, Uint32 th, MeshGpu& m,
+                          SDL_GPUTextureFormat depthFmt =
+                              SDL_GPU_TEXTUREFORMAT_INVALID) {
   std::vector<uint8_t> v = ReadSpirv(vertSpv), f = ReadSpirv(fragSpv);
   if (!IsSpirv(v) || !IsSpirv(f) || verts.empty()) {
     fprintf(stderr, "render3d: bad mesh SPIR-V or empty verts (%s / %s)\n",
@@ -395,6 +480,13 @@ inline bool InitMeshVerts(SDL_GPUDevice* dev, SDL_GPUTextureFormat fmt,
   ci.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
   ci.target_info.color_target_descriptions = &ct;
   ci.target_info.num_color_targets = 1;
+  if (depthFmt != SDL_GPU_TEXTUREFORMAT_INVALID) {
+    ci.depth_stencil_state.enable_depth_test = true;
+    ci.depth_stencil_state.enable_depth_write = true;
+    ci.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS;
+    ci.target_info.has_depth_stencil_target = true;
+    ci.target_info.depth_stencil_format = depthFmt;
+  }
   m.pipe = SDL_CreateGPUGraphicsPipeline(dev, &ci);
   if (!m.pipe) {
     fprintf(stderr, "render3d: mesh pipeline failed: %s\n", SDL_GetError());
@@ -436,39 +528,8 @@ inline bool InitMesh(SDL_GPUDevice* dev, SDL_GPUTextureFormat fmt,
   // Texture: decode .pcx -> RGBA. Any failure falls back to the checker.
   Uint32 tw = 0, th = 0;
   std::vector<uint8_t> rgba;
-  if (texPath && *texPath) {
-    try {
-      pcx::Image im = pcx::Decode(ReadWholeFile(texPath));
-      tw = (Uint32)im.w;
-      th = (Uint32)im.h;
-      size_t n = (size_t)im.w * im.h;
-      rgba.resize(n * 4);
-      for (size_t i = 0; i < n; ++i) {
-        uint8_t r, g, b, a = 255;
-        if (im.planes == 1) {
-          uint8_t k = im.idx[i];
-          r = im.pal[3 * k];
-          g = im.pal[3 * k + 1];
-          b = im.pal[3 * k + 2];
-        } else {
-          size_t o = i * (im.planes == 3 ? 3 : 4);
-          r = im.px[o];
-          g = im.px[o + 1];
-          b = im.px[o + 2];
-          if (im.planes == 4) a = im.px[o + 3];
-        }
-        rgba[4 * i] = r;
-        rgba[4 * i + 1] = g;
-        rgba[4 * i + 2] = b;
-        rgba[4 * i + 3] = a;
-      }
-    } catch (const std::exception& e) {
-      fprintf(stderr, "render3d: pcx decode failed (%s): %s\n", texPath,
-              e.what());
-      tw = th = 0;
-      rgba.clear();
-    }
-  }
+  if (texPath && *texPath)
+    DecodePcxRgba(texPath, tw, th, rgba);
 
   std::vector<VertexA> verts = BuildMeshA(model, (float)tw, (float)th);
   if (verts.empty()) {

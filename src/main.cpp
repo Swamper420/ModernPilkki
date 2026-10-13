@@ -217,9 +217,14 @@ int main(int argc, char **argv) {
 
 #ifdef RENDER3D_MESH_VERT_SPV
   render3d::Bridge bridge;  // it9: offscreen 3D lake -> SDL_Texture background
-  if (use3d && cli && !activeLake.empty())
+  if (use3d && cli && !activeLake.empty()) {
     bridge.Init(r, activeLake, RENDER3D_MESH_VERT_SPV, RENDER3D_MESH_FRAG_SPV,
                 winw, winh);
+    // it10: the lake's static objects, baked into world-space meshes.
+    bridge.InitProps(models::RootFromObjPath(objPath), groups, tab, depth, 12.f,
+                     RENDER3D_MESH_VERT_SPV, RENDER3D_MESH_FRAG_SPV);
+    printf("3d props: %zu\n", bridge.props.size());
+  }
   printf("3d background: %s\n", bridge.Ok() ? "on" : "off");
 #endif
 
@@ -391,9 +396,12 @@ int main(int argc, char **argv) {
                                    hasVisual ? &visual : nullptr);
       SetBgTexture(r, t, bg);
 #ifdef RENDER3D_MESH_VERT_SPV
-      if (use3d)
+      if (use3d) {
         bridge.Init(r, lp, RENDER3D_MESH_VERT_SPV, RENDER3D_MESH_FRAG_SPV, winw,
                     winh);
+        bridge.InitProps(models::RootFromObjPath(objPath), groups, tab, depth,
+                         12.f, RENDER3D_MESH_VERT_SPV, RENDER3D_MESH_FRAG_SPV);
+      }
 #endif
       fish.Seed(0x1234);
       fish.SetLake(depth.cells.empty() ? nullptr : &depth,

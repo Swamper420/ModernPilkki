@@ -32,6 +32,21 @@ inline float SceneHeight(uint8_t c) {
   return kSceneDepthTable[idx] / 2500.f;
 }
 
+// Terrain surface height (world y) at a world (x,z), matching BuildTerrainMesh:
+// the grid vertex nearest the point, dipped by zScale. Used to sit props on the
+// stand-in bed. Returns 0 for a degenerate grid.
+inline float TerrainHeightAt(const ves::Grid& g, float wx, float wz,
+                             float zScale = 12.f) {
+  const int w = g.w, h = g.h;
+  if (w < 2 || h < 2 || (int)g.cells.size() < w * h) return 0.f;
+  auto cell = [](float v, int n) {
+    int i = (int)lroundf((v + 128.f) * (n - 1) / 256.f);
+    return i < 0 ? 0 : (i >= n ? n - 1 : i);
+  };
+  const int x = cell(wx, w), y = cell(wz, h);
+  return -SceneHeight(g.cells[(size_t)y * w + x]) * zScale;
+}
+
 // Camera: eye + target in world units (x/z = +-128 ground plane, y = up).
 struct SceneCam {
   float ex = 0, ey = 40, ez = 90;

@@ -9,11 +9,13 @@
 #include <vector>
 
 #include "obj.hpp"
+#include "objects.hpp"
 #include "render3d.hpp"
 #include "render3d_camera.hpp"
 #include "render3d_layout.hpp"
 #include "render3d_math.hpp"
 #include "render3d_mesh.hpp"
+#include "render3d_objects.hpp"
 #include "render3d_scene.hpp"
 #include "render3d_terrain.hpp"
 
@@ -92,7 +94,9 @@ static void testQuad() {
   assert(sizeof q.v == kFixedQuadVbBytes && sizeof q.idx == kFixedQuadIbBytes);
 }
 
-static bool eq(float a, float b) { return fabsf(a - b) < 1e-4f; }
+static bool eq(float a, float b, float eps = 1e-4f) {
+  return fabsf(a - b) < eps;
+}
 
 // Mat4 compare. The original's mul sums terms in compiler-scheduled order; our
 // natural k=0..3 order can differ in the last float bit, hence the epsilon.
@@ -377,6 +381,76 @@ static void testScene() {
   assert(o[1] / o[3] > 0.f);
 }
 
+// Iteration 10: lake objects (objpos) baked into world-space layout-A meshes.
+static void testProps() {
+  using namespace render3d;
+
+  // Scale / yaw / transform helpers.
+  Mat4 S = MatScale(2);
+  float p[3];
+  XformPoint(S, 1, 2, 3, p);
+  assert(eq(p[0], 2) && eq(p[1], 4) && eq(p[2], 6));
+  XformDir(MatScale(2), 1, 0, 0, p);  // scale does not move directions
+  assert(eq(p[0], 2));
+  XformPoint(MatRotY(90), 1, 0, 0, p);  // Ry(90): +x -> -z
+  assert(eq(p[0], 0) && eq(p[2], -1));
+
+  // MeshExtent = largest bbox axis.
+  obj::Model m;
+  m.verts = {{0, 0, 0}, {10, 0, 0}, {0, 30, 0}};
+  obj::Face mf;
+  mf.v[0] = 0; mf.v[1] = 1; mf.v[2] = 2;
+  m.faces = {mf};
+  assert(eq(MeshExtent(m), 30));
+
+  // TerrainHeightAt reads the same cell as BuildTerrainMesh.
+  ves::Grid g;
+  g.w = 3; g.h = 3;
+  g.cells = {0, 0, 0, 0, 255, 0, 0, 0, 0};
+  assert(eq(TerrainHeightAt(g, -128, -128, 20.f), 0.f));  // corner cell
+  assert(TerrainHeightAt(g, 0, 0, 20.f) < -15.f);          // centre cell dips
+  ves::Grid e;
+  assert(eq(TerrainHeightAt(e, 0, 0, 20.f), 0.f));         // degenerate grid
+
+  // PropInstances: game units -> +-128 frame, non-gfx classes skipped.
+  objects::ObjTable tab;
+  tab.rows.resize(2);
+  tab.rows[0].angle = 30; tab.rows[0].scale = 2.0;
+  tab.rows[0].file = "gfx/obj/nature/koivu.obj";
+  tab.rows[1].file = "<automatic>";
+  ves::ObjGroup grp;
+  ves::ObjRec r0; r0.cls = 0; r0.x = 600; r0.y = 600;  // mid-grid (cell 1,1)
+  ves::ObjRec r1; r1.cls = 1;                                    // skipped
+  grp.push_back(r0); grp.push_back(r1);
+  auto inst = PropInstances({grp}, &tab, g);
+  assert(inst.size() == 1);
+  assert(inst[0].file == "gfx/obj/nature/koivu.obj");
+  assert(eq(inst[0].yaw, 30) && eq(inst[0].scale, 2.0));
+  assert(eq(inst[0].x, 0.f) && eq(inst[0].z, 0.f));  // 600*50/600 -> mid cell
+  assert(PropInstances({grp}, nullptr, g).empty());
+
+  // BakeProps: one instance of a 30-unit model -> ext/180 scaled, lifted to sit.
+  std::vector<PropInstance> one(1);
+  one[0].scale = 2.0f;  // yaw 0 for a clean extent check
+  auto baked = BakeProps(m, one, g, 20.f, 0.f, 0.f);
+  assert(baked.size() == 3u);
+  // s = ext/180 * scale = 30/180 * 2 = 1/3. Model x span 10 -> 10/30*s,
+  // y span 30 -> s, centre y = terrain(-20) + s/2.
+  float minX = 1e9f, maxX = -1e9f, minY = 1e9f, maxY = -1e9f;
+  for (auto& v : baked) {
+    if (v.px < minX) minX = v.px;
+    if (v.px > maxX) maxX = v.px;
+    if (v.py < minY) minY = v.py;
+    if (v.py > maxY) maxY = v.py;
+  }
+  assert(eq(maxX - minX, (10.f / 30.f) * (1.f / 3.f), 1e-3f));
+  assert(eq(maxY - minY, 1.f / 3.f, 1e-3f));
+  assert(eq((minY + maxY) * 0.5f, -20.f + 1.f / 6.f, 1e-3f));
+  // Empty model -> empty bake.
+  obj::Model none;
+  assert(BakeProps(none, one, g, 20.f, 0.f, 0.f).empty());
+}
+
 int main() {
   // 16:9 target in a 4:3 window -> full width, letterbox top/bottom.
   render3d::Rect r = render3d::Letterbox(800, 600, 16.f / 9.f);
@@ -416,6 +490,7 @@ int main() {
   testCameraCbs();
   testSyntheticGrid();
   testScene();
+  testProps();
 
   printf("render3d tests pass\n");
   return 0;

@@ -11,5 +11,9 @@ layout(location = 0) out vec4 o;
 
 void main() {
   vec4 c = texture(tex, uv);
+  // Clean-room colour-key: the .pcx textures are 8-bit paletted with no alpha
+  // and use magenta (255,0,255) as the transparent colour; cut it out like the
+  // original's alpha test. The terrain/water texture never contains magenta.
+  if (c.r > 0.9 && c.g < 0.15 && c.b > 0.9) discard;
   o = vec4(c.rgb * shade, c.a);
 }

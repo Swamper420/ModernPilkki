@@ -468,6 +468,35 @@ not match the perspective view); the angler is re-drawn at a fixed screen spot.
 `ponytail:` full-frame GPU->CPU readback per frame -- replace with a real
 SDL_GPU present path once the HUD moves off SDL_Renderer.
 
+### 8.5 Static lake objects (`src/render3d_objects.hpp`)
+
+Stand-in for `0040afd0` (draw one `.obj` instance) / the object walk in
+`004a5d00`. The objpos placements are static, so every instance of a source
+model is baked (world-transformed) into one layout-A vertex list at init and
+drawn with the shared view-projection -- 30 draws for haapolahti's 2066 records,
+instead of one per instance.
+
+* **Placement**: `FUN_004b6d70` stores `rec.x/y/z` RAW (no fixed-point shift),
+  in game units (600 per cell, `game::kCell`); they span `0..600*GridW`. The
+  earlier "8.24 fixed" note (and `render.hpp DrawObjects`' `/2^24`) is wrong --
+  it maps every object into the middle 0.4% of the frame. The port maps them
+  with the terrain mesh's `(w-1)` division so props line up with the bed:
+  `world = rec.x * 256/(600*(w-1)) - 128`.
+* **Yaw/scale**: `objects.dat` `Angle` (deg, applied as `Ry`) and `Scale`
+  (multiplier); the model is normalised to a unit box by `BuildMeshA`, so its
+  real size is restored with `MeshExtent/180` (`DAT_006d0528`) times `Scale`.
+  Classes whose file is not `gfx/...` (`<automatic>` footprints/holes) are
+  skipped; models are lifted by half their max extent to sit on the bed.
+* **Texture**: only `tex[0]` is used (multi-texture models like the houses use
+  the wrong material on some faces -- open). The `.pcx` palette uses magenta
+  `(255,0,255)` as the transparent colour; `mesh.frag` cuts it out (clean-room
+  alpha-test stand-in) and asset paths are opened case-insensitively
+  (`render3d_pipeline.hpp ResolveCase`).
+* **Depth**: the world pass (bridge) now has a `D32_FLOAT` depth target, enabled
+  by the new `depthFmt` argument on `InitMeshVerts`; terrain and props share it
+  so objects occlude correctly. Depthless callers (`render3d_view`, the it6
+  mesh) keep the default `SDL_GPU_TEXTUREFORMAT_INVALID`.
+
 ---
 
 ## 9. Draw order (one play frame, verified skeleton)

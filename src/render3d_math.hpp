@@ -97,6 +97,33 @@ inline Mat4 Transpose(const Mat4& a) {
   return r;
 }
 
+// Uniform scale about the origin (row-vector: v*S). Not part of 00599d40 (its
+// third arg is rotation, see the header note); needed to restore a baked model's
+// real size -- BuildMeshA normalises every mesh to a unit box (render3d_mesh.hpp).
+inline Mat4 MatScale(float s) {
+  return Mat4{{s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, 0, 0, 0, 1}};
+}
+
+// Yaw about the vertical (engine +Y) axis, degrees -> the original's two-step
+// factor (DAT_006d0528 * pi == pi/180). Matches 00599d40's M4 = Ry(a4).
+inline Mat4 MatRotY(float deg) {
+  const float a = deg * kDeg2Rad;
+  const float c = cosf(a), s = sinf(a);
+  return Mat4{{c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1}};
+}
+
+// Row-vector transform of a point (w=1) / direction (w=0) by a row-major Mat4.
+inline void XformPoint(const Mat4& m, float x, float y, float z, float out[3]) {
+  out[0] = x * m.m[0] + y * m.m[4] + z * m.m[8] + m.m[12];
+  out[1] = x * m.m[1] + y * m.m[5] + z * m.m[9] + m.m[13];
+  out[2] = x * m.m[2] + y * m.m[6] + z * m.m[10] + m.m[14];
+}
+inline void XformDir(const Mat4& m, float x, float y, float z, float out[3]) {
+  out[0] = x * m.m[0] + y * m.m[4] + z * m.m[8];
+  out[1] = x * m.m[1] + y * m.m[5] + z * m.m[9];
+  out[2] = x * m.m[2] + y * m.m[6] + z * m.m[10];
+}
+
 // Internal: translation with the last row (m[12..14]) = (x,y,z).
 inline Mat4 MatTranslate(float x, float y, float z) {
   Mat4 r = Identity();
