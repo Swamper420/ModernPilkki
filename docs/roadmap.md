@@ -86,7 +86,8 @@ Port as NEW files (`src/render3d.*` + viewer + tests) first, wire into
 | 5 | `5ea6e54` | layout-B textured quad + the buffer/texture upload path (`src/shaders/quad.*`, `render3d_pipeline.hpp` `Quad`: VS+PS, sampler, RGBA8 texture, VB/IB via `SDL_UploadToGPUBuffer`, `MakeQuad`); drawn in `render3d_view --quad`; pixel-verified offscreen |
 | 6 | `4902336` | layout-A `.obj` static mesh + `.pcx` texture upload (`render3d_mesh.hpp` `BuildMeshA`, `render3d_pipeline.hpp` `MeshGpu`, clean-room `src/shaders/mesh.*`); `render3d_view --obj P [--tex Q]`; generalised `Ctx::Draw`; pixel-verified with `varis_b.obj` + `varis.pcx` |
 | 7 | `5914a85` | terrain cell pipeline: cull (0040e260 integer cross + `DAT_006d0590`/`005b8` test) + layout-B append (006487f0) + flush signal (0064c8a0) in `src/render3d_terrain.hpp`; camera CB0/CB1 packing (00650910/0064f470) in `src/render3d_camera.hpp`; `render3d_view --terrain` (synthetic grid, layout-B triangle list); tests |
-| 8 (next) | - | `004a7660` per-frame projection (depth grid -> screen positions): cell array `+0x15248`, frame-delta `7c695c`, camera fields `+0x1ee88/90/98` (docs/render.md 8.1/13); then wire the world + camera into `main.cpp` mode 0x14 |
+| 8 | `<this>` | world-space lake scene (`src/render3d_scene.hpp`): DEPTHMAP -> layout-A mesh + palette texture + clean-room look-at/perspective; `InitMeshVerts` split in `render3d_pipeline.hpp`; `render3d_view --lake P`; tests |
+| 9 (next) | - | wire the 3D scene into `main.cpp` PLAY (GPU offscreen render -> SDL_Texture bridge under the SDL_Renderer HUD) and/or the exact `004a7660` projection; docs/render.md 8.1/8.3/13 |
 
 Shaders are re-authored GLSL (clean-room); no DXBC shipped. `glslc`
 present in this env; CMake targets skip the GPU/exe gracefully if absent

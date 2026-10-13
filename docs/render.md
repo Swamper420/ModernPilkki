@@ -446,6 +446,16 @@ uv[material-scaled]`, `depth = 0x3a83126f` (0.001), `alpha = param_7[3]`. Return
 assignment of `param_2`/`param_4` is still open (the caller passes a matrix
 derived from `model+0x5a0`; exact field map UNVERIFIED).
 
+### 8.3 World-space scene (ported: `src/render3d_scene.hpp`)
+
+Stand-in for `004a7660`, not a port: the DEPTHMAP grid becomes a static
+world-space layout-A mesh (`BuildTerrainMesh`: x/z in +-128, y =
+`kSceneDepthTable[cell*17/256]/2500 * zScale`, finite-difference normals, uv =
+normalised grid) plus a palette texture (`BuildTerrainTex`), drawn with a
+clean-room look-at + perspective (`ViewProj`, Vulkan y-down, clip z 0..1). This
+is the standard GPU shape and reuses the layout-A mesh pipeline; it exists so
+the lake can be seen in 3D before the exact CPU projection is decompiled.
+
 ---
 
 ## 9. Draw order (one play frame, verified skeleton)
@@ -642,6 +652,7 @@ src/render3d_shaders  re-authored HLSL/GLSL + input layout tables
 src/render3d_terrain.hpp  0040e260/006487f0 cell cull + append (it7; 004a7660
                           projection still open)
 src/render3d_camera.hpp   00650910/0064f470 CB0+CB1 packing (it7)
+src/render3d_scene.hpp    DEPTHMAP -> layout-A terrain mesh + camera (it8 stand-in)
 src/render3d_model.cpp    0040b0b0/0040afd0/camera
 test_render3d.cpp     smallest checks: matrix mults, terrain cull, layout packing
 ```

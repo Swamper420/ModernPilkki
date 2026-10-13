@@ -357,18 +357,73 @@ struct MeshGpu {
 
 inline void ReleaseMesh(SDL_GPUDevice* dev, MeshGpu& m);
 
+// Creates the layout-A pipeline and uploads a ready-made vertex list + RGBA
+// texture (fallback: checker). Shared by the .obj path and the terrain scene.
+inline bool InitMeshVerts(SDL_GPUDevice* dev, SDL_GPUTextureFormat fmt,
+                          const char* vertSpv, const char* fragSpv,
+                          std::vector<VertexA> verts, std::vector<uint8_t> rgba,
+                          Uint32 tw, Uint32 th, MeshGpu& m) {
+  std::vector<uint8_t> v = ReadSpirv(vertSpv), f = ReadSpirv(fragSpv);
+  if (!IsSpirv(v) || !IsSpirv(f) || verts.empty()) {
+    fprintf(stderr, "render3d: bad mesh SPIR-V or empty verts (%s / %s)\n",
+            vertSpv, fragSpv);
+    return false;
+  }
+
+  m.vs = MakeShader(dev, v, SDL_GPU_SHADERSTAGE_VERTEX, /*uniform_buffers=*/1);
+  m.ps = MakeShader(dev, f, SDL_GPU_SHADERSTAGE_FRAGMENT, /*uniform_buffers=*/0,
+                    /*samplers=*/1);
+  if (!m.vs || !m.ps) {
+    fprintf(stderr, "render3d: mesh shader failed: %s\n", SDL_GetError());
+    ReleaseMesh(dev, m);
+    return false;
+  }
+
+  SDL_GPUColorTargetDescription ct{};
+  ct.format = fmt;
+  SDL_GPUGraphicsPipelineCreateInfo ci{};
+  ci.vertex_shader = m.vs;
+  ci.fragment_shader = m.ps;
+  ci.vertex_input_state.vertex_buffer_descriptions = kDescA;
+  ci.vertex_input_state.num_vertex_buffers = 1;
+  ci.vertex_input_state.vertex_attributes = kAttrA;
+  ci.vertex_input_state.num_vertex_attributes = 3;
+  ci.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+  ci.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+  ci.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+  ci.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+  ci.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
+  ci.target_info.color_target_descriptions = &ct;
+  ci.target_info.num_color_targets = 1;
+  m.pipe = SDL_CreateGPUGraphicsPipeline(dev, &ci);
+  if (!m.pipe) {
+    fprintf(stderr, "render3d: mesh pipeline failed: %s\n", SDL_GetError());
+    ReleaseMesh(dev, m);
+    return false;
+  }
+
+  m.sampler = MakeSampler(dev);
+  if (rgba.empty()) {
+    rgba = CheckerRgba(64, 64);
+    tw = th = 64;
+  }
+  m.tex = UploadTexture2D(dev, rgba.data(), tw, th);
+  m.vb = UploadBuffer(dev, SDL_GPU_BUFFERUSAGE_VERTEX, verts.data(),
+                      (Uint32)(verts.size() * sizeof(VertexA)));
+  m.vertexCount = (Uint32)verts.size();
+  if (!m.sampler || !m.tex || !m.vb) {
+    fprintf(stderr, "render3d: mesh resource failed: %s\n", SDL_GetError());
+    ReleaseMesh(dev, m);
+    return false;
+  }
+  return true;
+}
+
 // Loads `objPath`, optionally uploads a `.pcx` texture `texPath` (fallback:
 // checker), builds layout-A verts (render3d_mesh.hpp) and creates the pipeline.
 inline bool InitMesh(SDL_GPUDevice* dev, SDL_GPUTextureFormat fmt,
                      const char* vertSpv, const char* fragSpv,
                      const char* objPath, const char* texPath, MeshGpu& m) {
-  std::vector<uint8_t> v = ReadSpirv(vertSpv), f = ReadSpirv(fragSpv);
-  if (!IsSpirv(v) || !IsSpirv(f)) {
-    fprintf(stderr, "render3d: bad/missing mesh SPIR-V (%s / %s)\n", vertSpv,
-            fragSpv);
-    return false;
-  }
-
   std::vector<uint8_t> od = ReadWholeFile(objPath);
   obj::Model model;
   try {
@@ -420,54 +475,8 @@ inline bool InitMesh(SDL_GPUDevice* dev, SDL_GPUTextureFormat fmt,
     fprintf(stderr, "render3d: mesh empty (%s)\n", objPath);
     return false;
   }
-
-  m.vs = MakeShader(dev, v, SDL_GPU_SHADERSTAGE_VERTEX, /*uniform_buffers=*/1);
-  m.ps = MakeShader(dev, f, SDL_GPU_SHADERSTAGE_FRAGMENT, /*uniform_buffers=*/0,
-                    /*samplers=*/1);
-  if (!m.vs || !m.ps) {
-    fprintf(stderr, "render3d: mesh shader failed: %s\n", SDL_GetError());
-    ReleaseMesh(dev, m);
-    return false;
-  }
-
-  SDL_GPUColorTargetDescription ct{};
-  ct.format = fmt;
-  SDL_GPUGraphicsPipelineCreateInfo ci{};
-  ci.vertex_shader = m.vs;
-  ci.fragment_shader = m.ps;
-  ci.vertex_input_state.vertex_buffer_descriptions = kDescA;
-  ci.vertex_input_state.num_vertex_buffers = 1;
-  ci.vertex_input_state.vertex_attributes = kAttrA;
-  ci.vertex_input_state.num_vertex_attributes = 3;
-  ci.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-  ci.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-  ci.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
-  ci.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
-  ci.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
-  ci.target_info.color_target_descriptions = &ct;
-  ci.target_info.num_color_targets = 1;
-  m.pipe = SDL_CreateGPUGraphicsPipeline(dev, &ci);
-  if (!m.pipe) {
-    fprintf(stderr, "render3d: mesh pipeline failed: %s\n", SDL_GetError());
-    ReleaseMesh(dev, m);
-    return false;
-  }
-
-  m.sampler = MakeSampler(dev);
-  if (rgba.empty()) {
-    rgba = CheckerRgba(64, 64);
-    tw = th = 64;
-  }
-  m.tex = UploadTexture2D(dev, rgba.data(), tw, th);
-  m.vb = UploadBuffer(dev, SDL_GPU_BUFFERUSAGE_VERTEX, verts.data(),
-                      (Uint32)(verts.size() * sizeof(VertexA)));
-  m.vertexCount = (Uint32)verts.size();
-  if (!m.sampler || !m.tex || !m.vb) {
-    fprintf(stderr, "render3d: mesh resource failed: %s\n", SDL_GetError());
-    ReleaseMesh(dev, m);
-    return false;
-  }
-  return true;
+  return InitMeshVerts(dev, fmt, vertSpv, fragSpv, std::move(verts),
+                       std::move(rgba), tw, th, m);
 }
 
 inline void ReleaseMesh(SDL_GPUDevice* dev, MeshGpu& m) {

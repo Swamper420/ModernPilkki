@@ -14,6 +14,7 @@
 #include "render3d_layout.hpp"
 #include "render3d_math.hpp"
 #include "render3d_mesh.hpp"
+#include "render3d_scene.hpp"
 #include "render3d_terrain.hpp"
 
 // Iteration 4: the CMake shader step must have produced valid SPIR-V for the
@@ -322,6 +323,59 @@ static void testSyntheticGrid() {
   assert(SyntheticGridVerts(1, 3, 200.f, 200.f).empty());
 }
 
+// Iteration 8: world-space lake scene (DEPTHMAP -> layout-A mesh + camera).
+static void testScene() {
+  using namespace render3d;
+  // Height table endpoints.
+  assert(eq(SceneHeight(0), 0.f));
+  assert(SceneHeight(255) > 0.9f);
+
+  ves::Grid g;
+  g.w = 3; g.h = 3;
+  g.cells = {0, 0, 0, 0, 255, 0, 0, 0, 0};
+  g.pal.resize(768, 0);
+  auto m = BuildTerrainMesh(g, 20.f);
+  assert(m.size() == 2u * 2u * 6u);
+  // Center vertex (the 255 cell) rises by ~1.0*20.
+  float maxY = 0.f;
+  for (auto& v : m) if (v.py > maxY) maxY = v.py;
+  assert(maxY > 15.f && maxY <= 20.001f);
+  // World x/z span +-128.
+  float minX = 1e9f, maxX = -1e9f;
+  for (auto& v : m) { if (v.px < minX) minX = v.px; if (v.px > maxX) maxX = v.px; }
+  assert(eq(minX, -128.f) && eq(maxX, 128.f));
+  // Normals are unit length.
+  for (auto& v : m) assert(fabsf(v.nx*v.nx + v.ny*v.ny + v.nz*v.nz - 1.f) < 1e-4f);
+
+  // Texture is w*h RGBA.
+  auto tex = BuildTerrainTex(g);
+  assert(tex.size() == 9u * 4u);
+
+  // Degenerate grid -> empty.
+  ves::Grid e;
+  assert(BuildTerrainMesh(e).empty());
+
+  // Camera: eye on +z looking at origin. The origin must project to clip
+  // x~0, and a point between near/far to z in 0..1.
+  SceneCam c;
+  c.ex = 0; c.ey = 0; c.ez = 10; c.tx = c.ty = c.tz = 0;
+  Mat4 vp = ViewProj(c, 1.f);
+  auto xf = [&](float x, float y, float z, float out[4]) {
+    float v[4] = {x, y, z, 1};
+    for (int i = 0; i < 4; ++i) {
+      out[i] = 0;
+      for (int j = 0; j < 4; ++j) out[i] += v[j] * vp.m[j * 4 + i];
+    }
+  };
+  float o[4];
+  xf(0, 0, 0, o);  // origin, on-axis
+  assert(fabsf(o[0]) < 1e-4f);
+  assert(fabsf(o[1]) < 1e-4f);
+  assert(o[2] / o[3] > 0.f && o[2] / o[3] < 1.f);  // in the depth range
+  xf(0, 5, 0, o);  // world +y is up -> clip y negative (Vulkan y-down)
+  assert(o[1] / o[3] < 0.f);
+}
+
 int main() {
   // 16:9 target in a 4:3 window -> full width, letterbox top/bottom.
   render3d::Rect r = render3d::Letterbox(800, 600, 16.f / 9.f);
@@ -360,6 +414,7 @@ int main() {
   testTerrainAppend();
   testCameraCbs();
   testSyntheticGrid();
+  testScene();
 
   printf("render3d tests pass\n");
   return 0;
