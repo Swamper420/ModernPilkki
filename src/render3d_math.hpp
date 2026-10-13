@@ -85,8 +85,11 @@ inline Mat4 Mul5(const Mat4& a, const Mat4& b, const Mat4& c, const Mat4& d,
   return Mul(Mul(Mul(Mul(a, b), c), d), e);
 }
 
-// 00650380: element (row,col) -> (col,row). This is the layout written to the
-// VS constant buffer (the original transposes into a stack copy then uploads).
+// 00650380: element (row,col) -> (col,row). The original transposes into a
+// stack copy before the D3D CB upload (HLSL column-vector semantics). SDL_GPU
+// + our GLSL shaders instead read the row-major matrix correctly when it is
+// pushed UNTRANSPOSED (verified: the scene camera only frames right without it),
+// so do not apply this before PushVertexUniform.
 inline Mat4 Transpose(const Mat4& a) {
   Mat4 r{};
   for (int i = 0; i < 4; ++i)

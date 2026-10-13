@@ -103,7 +103,7 @@ struct Bridge {
     SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
     SDL_GPUViewport vp{0, 0, (float)w, (float)h, 0, 1};
     SDL_SetGPUViewport(rp, &vp);
-    Mat4 mvp = Transpose(ViewProj(c, h > 0 ? (float)w / (float)h : 1.f));
+    Mat4 mvp = ViewProj(c, h > 0 ? (float)w / (float)h : 1.f);
     SDL_PushGPUVertexUniformData(cmd, 0, mvp.m, sizeof mvp.m);
     SDL_BindGPUGraphicsPipeline(rp, mesh.pipe);
     SDL_GPUBufferBinding vb{mesh.vb, 0};

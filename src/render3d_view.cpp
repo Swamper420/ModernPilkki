@@ -154,7 +154,7 @@ int main(int argc, char **argv) {
           sc.ez = cosf(a) * 150.f;
           sc.tx = sc.ty = sc.tz = 0.f;
           float aspect = r.h > 0 ? r.w / r.h : 1.f;
-          render3d::Mat4 vp = render3d::Transpose(render3d::ViewProj(sc, aspect));
+          render3d::Mat4 vp = render3d::ViewProj(sc, aspect);
           gpu.PushVertexUniform(vp.m, sizeof vp.m);
           d = render3d::Draw{mesh.pipe, mesh.vb, nullptr, mesh.tex, mesh.sampler,
                              mesh.vertexCount};
@@ -165,8 +165,7 @@ int main(int argc, char **argv) {
                              terra.sampler, terra.vertexCount};
         } else if (useMesh) {
           // Rotation-only model matrix (positions are pre-centered/unit).
-          render3d::Mat4 rot = render3d::Transpose(
-              render3d::WorldMatrix(0, 0, 0, 0, (float)n * 3.f, 0));
+          render3d::Mat4 rot = render3d::WorldMatrix(0, 0, 0, 0, (float)n * 3.f, 0);
           gpu.PushVertexUniform(rot.m, sizeof rot.m);
           d = render3d::Draw{mesh.pipe, mesh.vb, nullptr, mesh.tex, mesh.sampler,
                              mesh.vertexCount};
