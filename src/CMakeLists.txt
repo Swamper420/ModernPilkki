@@ -124,7 +124,7 @@ if(GLSL_COMPILER)
                                              ${RENDER3D_QUAD_FRAG_SPV}
                                              ${RENDER3D_MESH_VERT_SPV}
                                              ${RENDER3D_MESH_FRAG_SPV})
-  foreach(tgt render3d_view test_render3d)
+  foreach(tgt render3d_view test_render3d pilkki)
     target_compile_definitions(${tgt} PRIVATE
       RENDER3D_VERT_SPV="${RENDER3D_VERT_SPV}"
       RENDER3D_FRAG_SPV="${RENDER3D_FRAG_SPV}"

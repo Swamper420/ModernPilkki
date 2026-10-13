@@ -1,6 +1,8 @@
 // Playable loop: lake scene (ves DEPTHMAP + OBJECT_POSITIONS) + input
 // bitmap + tick driver + audio init + offline UI states.
-// Usage: ./pilkki [lake.ves] [objects.dat] [snow=0|1] [frames=0]
+// Usage: ./pilkki [lake.ves] [objects.dat] [snow=0|1] [frames=0] [--3d]
+//   --3d: PLAY background from the SDL_GPU 3D lake scene (it9) under the
+//   SDL_Renderer HUD instead of the baked 2.5D terrain.
 // No lake args: TITLE -> LAKE_SELECT (scans extracted/lakes/*.ves) ->
 // PLAY (HUD) -> PAUSE -> RESULTS. Lake args skip menus straight to PLAY.
 // Missing/unparseable files: prints reason, continues with empty scene
@@ -27,6 +29,10 @@
 #include "tick.hpp"
 #include "ui.hpp"
 #include "ves.hpp"
+
+#ifdef RENDER3D_MESH_VERT_SPV
+#include "render3d_bridge.hpp"  // it9: 3D PLAY background under the SDL_Renderer HUD
+#endif
 
 static std::vector<uint8_t> Read(const char *p) {
   FILE *f = fopen(p, "rb");
@@ -134,10 +140,13 @@ static bool ScreenToWorld(float mx, float my, int bgW, int bgH,
 int main(int argc, char **argv) {
   // Flags filtered out so positional CLI still works.
   bool useBots = true;
+  bool use3d = false;
   std::vector<const char *> pos;
   for (int i = 1; i < argc; i++)
     if (std::string(argv[i]) == "--no-bots")
       useBots = false;
+    else if (std::string(argv[i]) == "--3d")
+      use3d = true;
     else
       pos.push_back(argv[i]);
   const char *lakePath = pos.size() > 0 ? pos[0] : nullptr;
@@ -154,6 +163,7 @@ int main(int argc, char **argv) {
   ui::Rules rules;
   std::string lakeName = "(none)";
   bool cli = lakePath && objPath;
+  std::string activeLake = (cli && lakePath) ? lakePath : "";
   if (cli) LoadScene(lakePath, objPath, snow, depth, typemap, hasType,
                      hasVisual, visual, groups, tables, tab, rules, lakeName);
 
@@ -204,6 +214,14 @@ int main(int argc, char **argv) {
   models::TexCache mTex;
   angler::Assets ang;  // HUMSHAD/rod/catch sprites, drawn fallback if missing
   angler::Load(ang, r);
+
+#ifdef RENDER3D_MESH_VERT_SPV
+  render3d::Bridge bridge;  // it9: offscreen 3D lake -> SDL_Texture background
+  if (use3d && cli && !activeLake.empty())
+    bridge.Init(r, activeLake, RENDER3D_MESH_VERT_SPV, RENDER3D_MESH_FRAG_SPV,
+                winw, winh);
+  printf("3d background: %s\n", bridge.Ok() ? "on" : "off");
+#endif
 
   input::Keys keys;
   game::Game fish;  // offline loop: sim in game.hpp (docs/sim.md deltas)
@@ -365,12 +383,18 @@ int main(int argc, char **argv) {
     if (uim.needLoad && uim.pendIdx >= 0 &&
         (size_t)uim.pendIdx < uim.lakes.size()) {
       std::string lp = uim.lakes[(size_t)uim.pendIdx].path;
+      activeLake = lp;
       LoadScene(lp.c_str(), objPath ? objPath : "extracted/data/objects.dat",
                 snow, depth, typemap, hasType, hasVisual, visual, groups,
                 tables, tab, rules, lakeName);
       bg = terrain::BuildBackground(depth, hasType ? &typemap : nullptr,
                                    hasVisual ? &visual : nullptr);
       SetBgTexture(r, t, bg);
+#ifdef RENDER3D_MESH_VERT_SPV
+      if (use3d)
+        bridge.Init(r, lp, RENDER3D_MESH_VERT_SPV, RENDER3D_MESH_FRAG_SPV, winw,
+                    winh);
+#endif
       fish.Seed(0x1234);
       fish.SetLake(depth.cells.empty() ? nullptr : &depth,
                    hasType ? &typemap : nullptr, &groups);
@@ -423,9 +447,29 @@ int main(int argc, char **argv) {
     for (auto &h : fish.holes)
       holes.push_back({fish.PortX(h.x), fish.PortY(h.y)});
     if (r) {
-      terrain::Draw(r, t, bg.w, bg.h, groups, tab, vc, pl, holes, false,
-                    0, 0, winw, winh, &mBank, &mTex);
-      {  // angler + holes + rod/line + bite + catch (dots fallback inside)
+      bool drew3d = false;
+#ifdef RENDER3D_MESH_VERT_SPV
+      if (use3d && bridge.Ok() && uim.state == ui::State::Play) {
+        // Third-person camera over the local player (port coords -> world).
+        float pxw = fish.PortX(fish.x), pyw = fish.PortY(fish.y);
+        render3d::SceneCam sc;
+        sc.ex = pxw; sc.ey = 48.f; sc.ez = pyw + 70.f;
+        sc.tx = pxw; sc.ty = 4.f; sc.tz = pyw - 15.f;
+        sc.fovDeg = 60.f; sc.nearZ = 1.f; sc.farZ = 600.f;
+        bridge.RenderFrame(sc);
+        SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
+        SDL_RenderClear(r);
+        SDL_RenderTexture(r, bridge.tex, nullptr, nullptr);
+        // The camera follows the player, so the local angler sits at a fixed
+        // screen spot; the 2.5D overlay cannot place it in the 3D view.
+        angler::DrawAngler(r, ang, (float)winw * 0.5f, (float)winh * 0.68f, 1);
+        drew3d = true;
+      }
+#endif
+      if (!drew3d)
+        terrain::Draw(r, t, bg.w, bg.h, groups, tab, vc, pl, holes, false,
+                      0, 0, winw, winh, &mBank, &mTex);
+      if (!drew3d) {  // angler overlay is 2.5D-mapped; skip over the 3D view
         angler::DrawOverlay(r, ang, vc, bg.w, bg.h, winw, winh, fish, pl.x,
                             pl.y, lineOut, lineX, lineY, simLive,
                             clock.delta / 1000.f, mBank.Human().ok);
@@ -508,6 +552,9 @@ int main(int argc, char **argv) {
   angler::Free(ang);  // before renderer: sprite textures die with it
   mTex.Destroy();  // before renderer: textures die with it
   menu::FreeBack(mback);
+#ifdef RENDER3D_MESH_VERT_SPV
+  bridge.Close();  // releases its own GPU device + SDL_Texture
+#endif
   if (r) SDL_DestroyRenderer(r);
   SDL_DestroyWindow(w);
   snd.Close();  // before SDL_Quit: stream destroy after quit corrupts heap

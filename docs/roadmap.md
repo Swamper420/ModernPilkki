@@ -87,7 +87,8 @@ Port as NEW files (`src/render3d.*` + viewer + tests) first, wire into
 | 6 | `4902336` | layout-A `.obj` static mesh + `.pcx` texture upload (`render3d_mesh.hpp` `BuildMeshA`, `render3d_pipeline.hpp` `MeshGpu`, clean-room `src/shaders/mesh.*`); `render3d_view --obj P [--tex Q]`; generalised `Ctx::Draw`; pixel-verified with `varis_b.obj` + `varis.pcx` |
 | 7 | `5914a85` | terrain cell pipeline: cull (0040e260 integer cross + `DAT_006d0590`/`005b8` test) + layout-B append (006487f0) + flush signal (0064c8a0) in `src/render3d_terrain.hpp`; camera CB0/CB1 packing (00650910/0064f470) in `src/render3d_camera.hpp`; `render3d_view --terrain` (synthetic grid, layout-B triangle list); tests |
 | 8 | `da90636` | world-space lake scene (`src/render3d_scene.hpp`): DEPTHMAP -> layout-A mesh + palette texture + clean-room look-at/perspective; `InitMeshVerts` split in `render3d_pipeline.hpp`; `render3d_view --lake P`; tests |
-| 9 (next) | - | wire the 3D scene into `main.cpp` PLAY (GPU offscreen render -> SDL_Texture bridge under the SDL_Renderer HUD) and/or the exact `004a7660` projection; docs/render.md 8.1/8.3/13 |
+| 9 | `<this>` | in-game bridge (`src/render3d_bridge.hpp`, `pilkki --3d`): offscreen SDL_GPU scene -> per-frame readback -> `SDL_Texture` PLAY background under the SDL_Renderer HUD; angler re-drawn at a fixed spot; CMake defines the shader paths for `pilkki` |
+| 10 (next) | - | exact `004a7660` projection (cell array `+0x15248`, frame-delta `7c695c`, camera `+0x1ee88/90/98`); move the HUD to SDL_GPU and drop the readback bridge; models/entities (0040afd0) and the local rod |
 
 Shaders are re-authored GLSL (clean-room); no DXBC shipped. `glslc`
 present in this env; CMake targets skip the GPU/exe gracefully if absent
@@ -100,7 +101,12 @@ extracted/gfx/txt/misc/varis.pcx`) is likewise pixel-checked (427 distinct
 colours, 667 non-grey pixels of 128x128). The it7 terrain grid
 (`SDL_VIDEODRIVER=offscreen SDL_GPU_DRIVER=vulkan ./build/render3d_view --terrain
 --frames 3`, prints `terrain pipeline ready`) is pixel-checked offscreen into an
-RGBA8 target (3504/4096 non-black, 3 colours). Game smoke test:
+RGBA8 target (3504/4096 non-black, 3 colours). `render3d_view --lake
+extracted/lakes/haapolahti.ves --frames 3` prints `scene pipeline ready`; the
+scene mesh is pixel-checked offscreen (8186/16384 non-black). In-game:
+`SDL_VIDEODRIVER=offscreen SDL_GPU_DRIVER=vulkan ./build/pilkki
+extracted/lakes/haapolahti.ves extracted/data/objects.dat 0 90 --3d` runs 90
+frames with `3d background: on` and exits 0. Game smoke test:
 `SDL_VIDEODRIVER=dummy ./build/pilkki extracted/lakes/haapolahti.ves
 extracted/data/objects.dat 0 60` runs 60 frames (lake 99x109, 219 audio
 clips, 5 bots, 2083 mesh tris) and exits 0.

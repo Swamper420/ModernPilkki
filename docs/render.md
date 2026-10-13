@@ -456,6 +456,16 @@ clean-room look-at + perspective (`ViewProj`, Vulkan y-down, clip z 0..1). This
 is the standard GPU shape and reuses the layout-A mesh pipeline; it exists so
 the lake can be seen in 3D before the exact CPU projection is decompiled.
 
+### 8.4 In-game bridge (`src/render3d_bridge.hpp`, `pilkki --3d`)
+
+`--3d` renders the it8 scene offscreen with SDL_GPU (the device never claims the
+window), downloads it each frame and updates an `SDL_Texture` that the existing
+SDL_Renderer blits as the PLAY background; the HUD, menus and overlays stay on
+SDL_Renderer. The 2.5D angler overlay is skipped in 3D mode (its projection does
+not match the perspective view); the angler is re-drawn at a fixed screen spot.
+`ponytail:` full-frame GPU->CPU readback per frame -- replace with a real
+SDL_GPU present path once the HUD moves off SDL_Renderer.
+
 ---
 
 ## 9. Draw order (one play frame, verified skeleton)
@@ -653,6 +663,7 @@ src/render3d_terrain.hpp  0040e260/006487f0 cell cull + append (it7; 004a7660
                           projection still open)
 src/render3d_camera.hpp   00650910/0064f470 CB0+CB1 packing (it7)
 src/render3d_scene.hpp    DEPTHMAP -> layout-A terrain mesh + camera (it8 stand-in)
+src/render3d_bridge.hpp   offscreen GPU scene -> SDL_Texture PLAY bg (it9)
 src/render3d_model.cpp    0040b0b0/0040afd0/camera
 test_render3d.cpp     smallest checks: matrix mults, terrain cull, layout packing
 ```
