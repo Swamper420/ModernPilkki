@@ -19,6 +19,7 @@
 #include "audio_play.hpp"
 #include "camera.hpp"
 #include "game.hpp"
+#include "hud.hpp"
 #include "input.hpp"
 #include "menu.hpp"
 #include "models.hpp"
@@ -214,6 +215,8 @@ int main(int argc, char **argv) {
   models::TexCache mTex;
   angler::Assets ang;  // HUMSHAD/rod/catch sprites, drawn fallback if missing
   angler::Load(ang, r);
+  hud::Assets hassets;  // HUD .spr + bitmap fonts, ui::Render fallback if missing
+  hud::Load(hassets, r);
 
 #ifdef RENDER3D_MESH_VERT_SPV
   render3d::Bridge bridge;  // it9: offscreen 3D lake -> SDL_Texture background
@@ -493,25 +496,19 @@ int main(int argc, char **argv) {
         hud.holes = (int)fish.holes.size();
         hud.catches = fish.catches;
         hud.kg = fish.totalKg;
+        hud.biggest = fish.biggest;
+        hud.lineDepth = fish.lineDepth;
+        hud.bite = fish.Biting();
+        for (int i = 0; i < game::Game::kBaitTypes; i++)
+          for (int j = 0; j < game::Game::kLureSlots; j++)
+            hud.baitLeft += fish.bait[i][j];
         if (!depth.cells.empty())
           hud.depthAt = (int)fish.DepthAt(fish.x, fish.y);  // bilinear cell
         if (uim.state == ui::State::Title ||
             uim.state == ui::State::LakeSelect)
           menu::Draw(r, mback, uim, setup, winw, winh);
-        else
-          ui::Render(uim, r, hud);
-        if (uim.state == ui::State::Results) {  // 004c2ce0 result rows
-          char rr[64];
-          if (fish.catches == 0) {
-            SDL_RenderDebugText(r, 16, winh - 96, "No bites.");
-          } else {
-            snprintf(rr, sizeof rr, "Kalojen yhteispaino %.1f kg",
-                     fish.totalKg);
-            SDL_RenderDebugText(r, 16, winh - 96, rr);
-            snprintf(rr, sizeof rr, "Isoin kala %.1f kg", fish.biggest);
-            SDL_RenderDebugText(r, 16, winh - 84, rr);
-          }
-        }
+        else if (!hud::Draw(r, winw, winh, uim, hud, hassets))
+          ui::Render(uim, r, hud);  // no HUD assets: debug-text fallback
         if (useBots && (uim.state == ui::State::Play ||
                         uim.state == ui::State::Results)) {
           auto board = comp.Board();
@@ -558,6 +555,7 @@ int main(int argc, char **argv) {
          mBank.nTri);
   if (t) SDL_DestroyTexture(t);
   angler::Free(ang);  // before renderer: sprite textures die with it
+  hud::Free(hassets);
   mTex.Destroy();  // before renderer: textures die with it
   menu::FreeBack(mback);
 #ifdef RENDER3D_MESH_VERT_SPV

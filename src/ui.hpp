@@ -148,6 +148,10 @@ struct Hud {
   int holes = 0;
   int catches = 0;
   double kg = 0;
+  double biggest = 0;
+  int lineDepth = 10;  // game::kLineM bucket
+  int baitLeft = 0;    // sum of the 4x16 bait grid
+  bool bite = false;
 };
 
 struct Game {

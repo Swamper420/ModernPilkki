@@ -38,6 +38,14 @@ Goal: `pilkki` opens window, loads lake, renders scene, plays sound, input works
 - Audio routing (`src/audio_play.hpp`, docs/audio.md): 1000-slot clip
   registry, music select 005c8270 per-lake style, splash = random of 6
   cast WAVs, catch = NostoPlain; drill stays synth (OSND needs Vorbis)
+- In-game HUD (`src/hud.hpp`, `src/test_hud.cpp`): depth gauge
+  (depthbar/d_up+d_base+d_down + d_lure needle on the 10..40 m buckets),
+  round icon buttons (clock/clk_1..5) with fish/bait/line counts, timer +
+  tally, bite flash + pause/results overlays, over the PLAY background;
+  text via the game bitmap fonts (fonts/fnt.spr 7x8 + fnt_iso.spr 18x23,
+  glyph frame = ASCII - 0x20); missing assets fall back to ui::Render
+  debug text. Layout is the port's design (004bc9e0/004bd330 panel
+  placement not decompiled yet).
 
 ## Next
 
