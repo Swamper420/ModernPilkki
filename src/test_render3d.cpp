@@ -8,9 +8,11 @@
 #include <cstring>
 #include <vector>
 
+#include "obj.hpp"
 #include "render3d.hpp"
 #include "render3d_layout.hpp"
 #include "render3d_math.hpp"
+#include "render3d_mesh.hpp"
 
 // Iteration 4: the CMake shader step must have produced valid SPIR-V for the
 // re-authored triangle shaders. Pure file check -- no GPU device needed.
@@ -39,7 +41,40 @@ static void testShaderArtifacts() {
   assert(n >= 20);
   assert(readMagic(RENDER3D_QUAD_FRAG_SPV, m, n) && m == kSpirvMagic);
   assert(n >= 20);
+  assert(readMagic(RENDER3D_MESH_VERT_SPV, m, n) && m == kSpirvMagic);
+  assert(n >= 20);
+  assert(readMagic(RENDER3D_MESH_FRAG_SPV, m, n) && m == kSpirvMagic);
+  assert(n >= 20);
 #endif
+}
+
+// Iteration 6: BuildMeshA flattens an .obj face into 3 layout-A verts with a
+// unit-extent position box, a face normal, and texture-normalized UVs.
+static void testMeshA() {
+  obj::Model mo;
+  mo.verts = {{0, 0, 0}, {10, 0, 0}, {0, 10, 0}};
+  obj::Face f;
+  f.v[0] = 0; f.v[1] = 1; f.v[2] = 2;
+  f.uv[0] = 0; f.uv[1] = 0; f.uv[2] = 4; f.uv[3] = 0; f.uv[4] = 0; f.uv[5] = 4;
+  mo.faces = {f};
+  auto va = render3d::BuildMeshA(mo, 8.f, 8.f);
+  assert(va.size() == 3);
+  // x span 10 -> inv 1/10, centered at (5,5,0).
+  assert(std::fabs(va[0].px + 0.5f) < 1e-5f && std::fabs(va[0].py + 0.5f) < 1e-5f);
+  assert(std::fabs(va[1].px - 0.5f) < 1e-5f && std::fabs(va[1].py + 0.5f) < 1e-5f);
+  assert(std::fabs(va[2].px + 0.5f) < 1e-5f && std::fabs(va[2].py - 0.5f) < 1e-5f);
+  // Face normal = +Z; flat-shaded (all 3 identical).
+  assert(std::fabs(va[0].nz - 1.f) < 1e-5f && std::fabs(va[1].nz - 1.f) < 1e-5f);
+  // UV: pixel coords / 8.
+  assert(std::fabs(va[0].u) < 1e-6f && std::fabs(va[0].v) < 1e-6f);
+  assert(std::fabs(va[1].u - 0.5f) < 1e-5f && std::fabs(va[1].v) < 1e-6f);
+  assert(std::fabs(va[2].u) < 1e-6f && std::fabs(va[2].v - 0.5f) < 1e-5f);
+  // Untextured -> zero UVs, still 3 verts.
+  auto v0 = render3d::BuildMeshA(mo, 0.f, 0.f);
+  assert(v0.size() == 3 && v0[0].u == 0.f && v0[0].v == 0.f);
+  // Empty model -> empty.
+  obj::Model empty;
+  assert(render3d::BuildMeshA(empty, 1.f, 1.f).empty());
 }
 
 // Iteration 5: layout-B quad packing -- 4 verts + a 4-index triangle strip,
@@ -238,6 +273,7 @@ int main() {
   testLayouts();
   testShaderArtifacts();
   testQuad();
+  testMeshA();
 
   printf("render3d tests pass\n");
   return 0;

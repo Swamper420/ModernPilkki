@@ -14,15 +14,16 @@ struct Rect {
   float x, y, w, h;
 };
 
-// Iteration 5: resources for one indexed layout-B quad draw. Pointers are
-// owned by the caller; Ctx only binds + draws them.
-struct QuadDraw {
+// Resources for one draw call. Pointers are owned by the caller; Ctx only
+// binds + draws. `ib` set => indexed; `vb` null => no vertex buffer (the it4
+// triangle reads gl_VertexIndex). `tex` set => fragment sampler slot 0.
+struct Draw {
   SDL_GPUGraphicsPipeline *pipe = nullptr;
   SDL_GPUBuffer *vb = nullptr;
   SDL_GPUBuffer *ib = nullptr;
   SDL_GPUTexture *tex = nullptr;
   SDL_GPUSampler *sampler = nullptr;
-  Uint32 indices = 0;
+  Uint32 count = 0;  // vertices, or indices when `ib` is set
 };
 
 // Aspect-preserving, centered viewport inside a winW x winH target.
@@ -107,10 +108,9 @@ struct Ctx {
     return true;
   }
 
-  // Clear + letterbox viewport, then submit. If `tri` is set, one hardcoded
-  // triangle is drawn; if `quad` is set, one indexed layout-B textured quad.
-  void EndFrame(SDL_GPUGraphicsPipeline *tri = nullptr,
-                const QuadDraw *quad = nullptr) {
+  // Clear + letterbox viewport, then submit. If `d` is set, one draw call
+  // (triangle / layout-B quad / layout-A mesh) is issued inside the viewport.
+  void EndFrame(const Draw *d = nullptr) {
     if (!cmd) return;
     float g = ClearGrey();
     SDL_GPUColorTargetInfo ct{};
@@ -122,18 +122,24 @@ struct Ctx {
     Rect r = Letterbox(pixW, pixH, 4.f / 3.f);
     SDL_GPUViewport vp{r.x, r.y, r.w, r.h, 0.f, 1.f};
     SDL_SetGPUViewport(rp, &vp);
-    if (tri) {
-      SDL_BindGPUGraphicsPipeline(rp, tri);
-      SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
-    }
-    if (quad && quad->pipe) {
-      SDL_BindGPUGraphicsPipeline(rp, quad->pipe);
-      SDL_GPUBufferBinding vb{quad->vb, 0}, ib{quad->ib, 0};
-      SDL_BindGPUVertexBuffers(rp, 0, &vb, 1);
-      SDL_BindGPUIndexBuffer(rp, &ib, SDL_GPU_INDEXELEMENTSIZE_16BIT);
-      SDL_GPUTextureSamplerBinding ts{quad->tex, quad->sampler};
-      SDL_BindGPUFragmentSamplers(rp, 0, &ts, 1);
-      SDL_DrawGPUIndexedPrimitives(rp, quad->indices, 1, 0, 0, 0);
+    if (d && d->pipe) {
+      SDL_BindGPUGraphicsPipeline(rp, d->pipe);
+      if (d->vb) {
+        SDL_GPUBufferBinding vb{d->vb, 0};
+        SDL_BindGPUVertexBuffers(rp, 0, &vb, 1);
+      }
+      if (d->ib) {
+        SDL_GPUBufferBinding ib{d->ib, 0};
+        SDL_BindGPUIndexBuffer(rp, &ib, SDL_GPU_INDEXELEMENTSIZE_16BIT);
+      }
+      if (d->tex) {
+        SDL_GPUTextureSamplerBinding ts{d->tex, d->sampler};
+        SDL_BindGPUFragmentSamplers(rp, 0, &ts, 1);
+      }
+      if (d->ib)
+        SDL_DrawGPUIndexedPrimitives(rp, d->count, 1, 0, 0, 0);
+      else
+        SDL_DrawGPUPrimitives(rp, d->count, 1, 0, 0);
     }
     SDL_EndGPURenderPass(rp);
     SDL_SubmitGPUCommandBuffer(cmd);

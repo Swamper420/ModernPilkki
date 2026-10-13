@@ -18,8 +18,40 @@
 #include <vector>
 
 #include "render3d_layout.hpp"
+#include "render3d_mesh.hpp"
+
+#include "pcx.hpp"
 
 namespace render3d {
+
+// Whole-file read for assets (.obj/.pcx); empty on failure.
+inline std::vector<uint8_t> ReadWholeFile(const char* path) {
+  std::vector<uint8_t> out;
+  FILE* f = fopen(path, "rb");
+  if (!f) return out;
+  fseek(f, 0, SEEK_END);
+  long n = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  if (n > 0) {
+    out.resize((size_t)n);
+    if (fread(out.data(), 1, (size_t)n, f) != (size_t)n) out.clear();
+  }
+  fclose(f);
+  return out;
+}
+
+// Nearest/clamp sampler -- a stand-in; the original's 4 sampler objects
+// (0064aa70) filter/address modes are not decoded yet (docs/render.md 13).
+inline SDL_GPUSampler* MakeSampler(SDL_GPUDevice* dev) {
+  SDL_GPUSamplerCreateInfo sci{};
+  sci.min_filter = SDL_GPU_FILTER_NEAREST;
+  sci.mag_filter = SDL_GPU_FILTER_NEAREST;
+  sci.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
+  sci.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+  sci.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+  sci.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+  return SDL_CreateGPUSampler(dev, &sci);
+}
 
 // SPIR-V word 0 (little endian).
 constexpr uint32_t kSpirvMagic = 0x07230203u;
@@ -279,14 +311,7 @@ inline bool InitQuad(SDL_GPUDevice* dev, SDL_GPUTextureFormat fmt,
     return false;
   }
 
-  SDL_GPUSamplerCreateInfo sci{};
-  sci.min_filter = SDL_GPU_FILTER_NEAREST;
-  sci.mag_filter = SDL_GPU_FILTER_NEAREST;
-  sci.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
-  sci.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-  sci.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-  sci.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-  q.sampler = SDL_CreateGPUSampler(dev, &sci);
+  q.sampler = MakeSampler(dev);
 
   std::vector<uint8_t> px = CheckerRgba(64, 64);
   q.tex = UploadTexture2D(dev, px.data(), 64, 64);
@@ -312,6 +337,147 @@ inline void ReleaseQuad(SDL_GPUDevice* dev, Quad& q) {
   if (q.vb) SDL_ReleaseGPUBuffer(dev, q.vb);
   if (q.ib) SDL_ReleaseGPUBuffer(dev, q.ib);
   q = Quad{};
+}
+
+// ---------------------------------------------------------------------------
+// Iteration 6: layout-A static mesh (.obj -> VertexA, layout A pipeline).
+// Adds .pcx texture upload (0064be00's RGBA path) reusing src/pcx.hpp.
+// ---------------------------------------------------------------------------
+
+struct MeshGpu {
+  SDL_GPUShader* vs = nullptr;
+  SDL_GPUShader* ps = nullptr;
+  SDL_GPUGraphicsPipeline* pipe = nullptr;
+  SDL_GPUSampler* sampler = nullptr;
+  SDL_GPUTexture* tex = nullptr;
+  SDL_GPUBuffer* vb = nullptr;
+  Uint32 vertexCount = 0;
+  bool Ok() const { return pipe != nullptr; }
+};
+
+inline void ReleaseMesh(SDL_GPUDevice* dev, MeshGpu& m);
+
+// Loads `objPath`, optionally uploads a `.pcx` texture `texPath` (fallback:
+// checker), builds layout-A verts (render3d_mesh.hpp) and creates the pipeline.
+inline bool InitMesh(SDL_GPUDevice* dev, SDL_GPUTextureFormat fmt,
+                     const char* vertSpv, const char* fragSpv,
+                     const char* objPath, const char* texPath, MeshGpu& m) {
+  std::vector<uint8_t> v = ReadSpirv(vertSpv), f = ReadSpirv(fragSpv);
+  if (!IsSpirv(v) || !IsSpirv(f)) {
+    fprintf(stderr, "render3d: bad/missing mesh SPIR-V (%s / %s)\n", vertSpv,
+            fragSpv);
+    return false;
+  }
+
+  std::vector<uint8_t> od = ReadWholeFile(objPath);
+  obj::Model model;
+  try {
+    model = obj::Parse(od);
+  } catch (const std::exception& e) {
+    fprintf(stderr, "render3d: obj parse failed (%s): %s\n", objPath, e.what());
+    return false;
+  }
+
+  // Texture: decode .pcx -> RGBA. Any failure falls back to the checker.
+  Uint32 tw = 0, th = 0;
+  std::vector<uint8_t> rgba;
+  if (texPath && *texPath) {
+    try {
+      pcx::Image im = pcx::Decode(ReadWholeFile(texPath));
+      tw = (Uint32)im.w;
+      th = (Uint32)im.h;
+      size_t n = (size_t)im.w * im.h;
+      rgba.resize(n * 4);
+      for (size_t i = 0; i < n; ++i) {
+        uint8_t r, g, b, a = 255;
+        if (im.planes == 1) {
+          uint8_t k = im.idx[i];
+          r = im.pal[3 * k];
+          g = im.pal[3 * k + 1];
+          b = im.pal[3 * k + 2];
+        } else {
+          size_t o = i * (im.planes == 3 ? 3 : 4);
+          r = im.px[o];
+          g = im.px[o + 1];
+          b = im.px[o + 2];
+          if (im.planes == 4) a = im.px[o + 3];
+        }
+        rgba[4 * i] = r;
+        rgba[4 * i + 1] = g;
+        rgba[4 * i + 2] = b;
+        rgba[4 * i + 3] = a;
+      }
+    } catch (const std::exception& e) {
+      fprintf(stderr, "render3d: pcx decode failed (%s): %s\n", texPath,
+              e.what());
+      tw = th = 0;
+      rgba.clear();
+    }
+  }
+
+  std::vector<VertexA> verts = BuildMeshA(model, (float)tw, (float)th);
+  if (verts.empty()) {
+    fprintf(stderr, "render3d: mesh empty (%s)\n", objPath);
+    return false;
+  }
+
+  m.vs = MakeShader(dev, v, SDL_GPU_SHADERSTAGE_VERTEX, /*uniform_buffers=*/1);
+  m.ps = MakeShader(dev, f, SDL_GPU_SHADERSTAGE_FRAGMENT, /*uniform_buffers=*/0,
+                    /*samplers=*/1);
+  if (!m.vs || !m.ps) {
+    fprintf(stderr, "render3d: mesh shader failed: %s\n", SDL_GetError());
+    ReleaseMesh(dev, m);
+    return false;
+  }
+
+  SDL_GPUColorTargetDescription ct{};
+  ct.format = fmt;
+  SDL_GPUGraphicsPipelineCreateInfo ci{};
+  ci.vertex_shader = m.vs;
+  ci.fragment_shader = m.ps;
+  ci.vertex_input_state.vertex_buffer_descriptions = kDescA;
+  ci.vertex_input_state.num_vertex_buffers = 1;
+  ci.vertex_input_state.vertex_attributes = kAttrA;
+  ci.vertex_input_state.num_vertex_attributes = 3;
+  ci.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+  ci.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+  ci.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+  ci.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+  ci.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
+  ci.target_info.color_target_descriptions = &ct;
+  ci.target_info.num_color_targets = 1;
+  m.pipe = SDL_CreateGPUGraphicsPipeline(dev, &ci);
+  if (!m.pipe) {
+    fprintf(stderr, "render3d: mesh pipeline failed: %s\n", SDL_GetError());
+    ReleaseMesh(dev, m);
+    return false;
+  }
+
+  m.sampler = MakeSampler(dev);
+  if (rgba.empty()) {
+    rgba = CheckerRgba(64, 64);
+    tw = th = 64;
+  }
+  m.tex = UploadTexture2D(dev, rgba.data(), tw, th);
+  m.vb = UploadBuffer(dev, SDL_GPU_BUFFERUSAGE_VERTEX, verts.data(),
+                      (Uint32)(verts.size() * sizeof(VertexA)));
+  m.vertexCount = (Uint32)verts.size();
+  if (!m.sampler || !m.tex || !m.vb) {
+    fprintf(stderr, "render3d: mesh resource failed: %s\n", SDL_GetError());
+    ReleaseMesh(dev, m);
+    return false;
+  }
+  return true;
+}
+
+inline void ReleaseMesh(SDL_GPUDevice* dev, MeshGpu& m) {
+  if (m.pipe) SDL_ReleaseGPUGraphicsPipeline(dev, m.pipe);
+  if (m.vs) SDL_ReleaseGPUShader(dev, m.vs);
+  if (m.ps) SDL_ReleaseGPUShader(dev, m.ps);
+  if (m.sampler) SDL_ReleaseGPUSampler(dev, m.sampler);
+  if (m.tex) SDL_ReleaseGPUTexture(dev, m.tex);
+  if (m.vb) SDL_ReleaseGPUBuffer(dev, m.vb);
+  m = MeshGpu{};
 }
 
 }  // namespace render3d

@@ -84,14 +84,21 @@ Port as NEW files (`src/render3d.*` + viewer + tests) first, wire into
 | 3 | `9af269f` | `src/render3d_layout.hpp` 6 input layouts (`0064b560`), CB table (`0064a790`), fixed buffers (`0064b350`), terrain append (`006487f0`) |
 | 4 | `ae941ac` | shader build (`glslc` -> SPIR-V via CMake, `src/shaders/*.vert\|frag`) + first graphics pipeline: one hardcoded triangle (`src/render3d_pipeline.hpp`), drawn in the `render3d_view` letterbox; SPIR-V artifact assert in `test_render3d` |
 | 5 | `5ea6e54` | layout-B textured quad + the buffer/texture upload path (`src/shaders/quad.*`, `render3d_pipeline.hpp` `Quad`: VS+PS, sampler, RGBA8 texture, VB/IB via `SDL_UploadToGPUBuffer`, `MakeQuad`); drawn in `render3d_view --quad`; pixel-verified offscreen |
-| 6 (next) | - | mesh A (`.obj` sub-mesh upload, layout A) + `.pcx` textures via `0064be00`; terrain grid gen from DEPTHMAP; camera/CB0 (`0064f470`) once the unresolved items in docs/render.md 13 are decompiled; wire into `main.cpp` |
+| 6 | `-` | layout-A `.obj` static mesh + `.pcx` texture upload (`render3d_mesh.hpp` `BuildMeshA`, `render3d_pipeline.hpp` `MeshGpu`, clean-room `src/shaders/mesh.*`); `render3d_view --obj P [--tex Q]`; generalised `Ctx::Draw`; pixel-verified with `varis_b.obj` + `varis.pcx` |
+| 7 (next) | - | terrain grid gen from DEPTHMAP (`004a7660`/`0040e260`/`006487f0`) as layout-B batches; camera/CB0 (`0064f470`/`00650910`) once view-vs-projection + the fov builder are decompiled (docs/render.md 13); wire the world into `main.cpp` mode 0x14 |
 
 Shaders are re-authored GLSL (clean-room); no DXBC shipped. `glslc`
 present in this env; CMake targets skip the GPU/exe gracefully if absent
 (`render3d_view` then falls back to clear-only). Verified end to end with
 `SDL_VIDEODRIVER=offscreen SDL_GPU_DRIVER=vulkan ./build/render3d_view --quad --frames 3`
 (prints `quad pipeline ready`); the quad is additionally pixel-checked by
-rendering to an offscreen RGBA8 target (two checker colours present).
+rendering to an offscreen RGBA8 target (two checker colours present). The
+it6 mesh (`--obj extracted/gfx/obj/animals/varis_b.obj --tex
+extracted/gfx/txt/misc/varis.pcx`) is likewise pixel-checked (427 distinct
+colours, 667 non-grey pixels of 128x128). Game smoke test:
+`SDL_VIDEODRIVER=dummy ./build/pilkki extracted/lakes/haapolahti.ves
+extracted/data/objects.dat 0 60` runs 60 frames (lake 99x109, 219 audio
+clips, 5 bots, 2083 mesh tris) and exits 0.
 
 ### Known issues (pre-existing, unrelated to the 3D work)
 

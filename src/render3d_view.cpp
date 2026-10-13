@@ -1,28 +1,36 @@
 // Standalone SDL_GPU viewer. Opens a window, clears to the letterbox viewport
 // each frame, and draws one of the iteration smoke tests:
-//   default : the it4 hardcoded triangle (render3d_pipeline.hpp Triangle)
-//   --quad  : the it5 indexed layout-B textured quad (Quad + fixed VB/IB)
-// Usage: render3d_view [--frames N] [--quad] [--vert P] [--frag P]
-//        (default N=3; 0 = until quit. P default to the build-time .spv paths.)
-// Exits 0 even when no GPU device / no shaders are available (headless/dummy).
+//   default        : it4 hardcoded triangle (gl_VertexIndex, no VB)
+//   --quad         : it5 indexed layout-B textured quad
+//   --obj P [--tex Q] : it6 layout-A .obj mesh with a .pcx texture
+// Usage: render3d_view [--frames N] [--quad] [--obj P] [--tex Q]
+//                      [--vert P] [--frag P]
+//        (default N=3; 0 = until quit. --vert/--frag default to the build-time
+//        .spv paths; --obj/--tex override the shaders to their it6 pair.)
+// Exits 0 even when no GPU device / no assets are available (headless/dummy).
 #include <SDL3/SDL.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include "render3d.hpp"
+#include "render3d_math.hpp"
 #include "render3d_pipeline.hpp"
 
 int main(int argc, char **argv) {
   int frames = 3;
   bool useQuad = false;
+  const char *objPath = nullptr, *texPath = nullptr;
   const char *vert = nullptr, *frag = nullptr;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--quad")) useQuad = true;
+    else if (!strcmp(argv[i], "--obj") && i + 1 < argc) objPath = argv[++i];
+    else if (!strcmp(argv[i], "--tex") && i + 1 < argc) texPath = argv[++i];
     else if (!strcmp(argv[i], "--vert") && i + 1 < argc) vert = argv[++i];
     else if (!strcmp(argv[i], "--frag") && i + 1 < argc) frag = argv[++i];
   }
+  const bool useMesh = objPath != nullptr && !useQuad;
 
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     printf("GPU unavailable: SDL_Init failed (%s)\n", SDL_GetError());
@@ -47,19 +55,32 @@ int main(int argc, char **argv) {
 
   // Shaders: argv override, else the .spv paths baked in by CMake (when glslc
   // was found). No shaders -> clear-only, still no crash.
-#ifdef RENDER3D_VERT_SPV
-  if (!vert) vert = useQuad ? RENDER3D_QUAD_VERT_SPV : RENDER3D_VERT_SPV;
-  if (!frag) frag = useQuad ? RENDER3D_QUAD_FRAG_SPV : RENDER3D_FRAG_SPV;
-#endif
   render3d::Triangle tri;
   render3d::Quad quad;
+  render3d::MeshGpu mesh;
   bool ready = false;
-  if (useQuad)
+#ifdef RENDER3D_VERT_SPV
+  if (useMesh) {
+    if (!vert) vert = RENDER3D_MESH_VERT_SPV;
+    if (!frag) frag = RENDER3D_MESH_FRAG_SPV;
+  } else if (useQuad) {
+    if (!vert) vert = RENDER3D_QUAD_VERT_SPV;
+    if (!frag) frag = RENDER3D_QUAD_FRAG_SPV;
+  } else {
+    if (!vert) vert = RENDER3D_VERT_SPV;
+    if (!frag) frag = RENDER3D_FRAG_SPV;
+  }
+#endif
+  if (useMesh)
+    ready = vert && frag &&
+            render3d::InitMesh(gpu.dev, gpu.swapFmt, vert, frag, objPath, texPath, mesh);
+  else if (useQuad)
     ready = vert && frag && render3d::InitQuad(gpu.dev, gpu.swapFmt, vert, frag, quad);
   else
     ready = vert && frag && render3d::InitTriangle(gpu.dev, gpu.swapFmt, vert, frag, tri);
-  printf("%s pipeline %s\n", useQuad ? "quad" : "triangle",
-         ready ? "ready" : "unavailable (shaders missing or GPU unsupported)");
+  const char *what = useMesh ? "mesh" : useQuad ? "quad" : "triangle";
+  printf("%s pipeline %s\n", what,
+         ready ? "ready" : "unavailable (assets/shaders missing or GPU unsupported)");
 
   bool run = true;
   int n = 0;
@@ -72,15 +93,25 @@ int main(int argc, char **argv) {
         gpu.Resize(e.window.data1, e.window.data2);
     }
     if (gpu.BeginFrame()) {
-      if (useQuad && quad.Ok()) {
-        render3d::Rect r = render3d::Letterbox(gpu.pixW, gpu.pixH, 4.f / 3.f);
-        float vp[2] = {r.w, r.h};
-        gpu.PushVertexUniform(vp, sizeof vp);
-        render3d::QuadDraw qd{quad.pipe, quad.vb, quad.ib, quad.tex, quad.sampler, 4};
-        gpu.EndFrame(nullptr, &qd);
-      } else {
-        gpu.EndFrame(tri.Ok() ? tri.pipe : nullptr);
+      render3d::Rect r = render3d::Letterbox(gpu.pixW, gpu.pixH, 4.f / 3.f);
+      render3d::Draw d;
+      if (ready) {
+        if (useMesh) {
+          // Rotation-only model matrix (positions are pre-centered/unit).
+          render3d::Mat4 rot = render3d::Transpose(
+              render3d::WorldMatrix(0, 0, 0, 0, (float)n * 3.f, 0));
+          gpu.PushVertexUniform(rot.m, sizeof rot.m);
+          d = render3d::Draw{mesh.pipe, mesh.vb, nullptr, mesh.tex, mesh.sampler,
+                             mesh.vertexCount};
+        } else if (useQuad) {
+          float vp[2] = {r.w, r.h};
+          gpu.PushVertexUniform(vp, sizeof vp);
+          d = render3d::Draw{quad.pipe, quad.vb, quad.ib, quad.tex, quad.sampler, 4};
+        } else {
+          d = render3d::Draw{tri.pipe, nullptr, nullptr, nullptr, nullptr, 3};
+        }
       }
+      gpu.EndFrame(ready ? &d : nullptr);
     }
     n++;
     SDL_Delay(16);
@@ -89,6 +120,7 @@ int main(int argc, char **argv) {
   printf("rendered %d frames\n", n);
   if (tri.Ok()) render3d::ReleaseTriangle(gpu.dev, tri);
   if (quad.Ok()) render3d::ReleaseQuad(gpu.dev, quad);
+  if (mesh.Ok()) render3d::ReleaseMesh(gpu.dev, mesh);
   gpu.Shutdown();
   SDL_DestroyWindow(w);
   SDL_Quit();
