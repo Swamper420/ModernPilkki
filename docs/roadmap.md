@@ -87,7 +87,7 @@ Port as NEW files (`src/render3d.*` + viewer + tests) first, wire into
 | 6 | `4902336` | layout-A `.obj` static mesh + `.pcx` texture upload (`render3d_mesh.hpp` `BuildMeshA`, `render3d_pipeline.hpp` `MeshGpu`, clean-room `src/shaders/mesh.*`); `render3d_view --obj P [--tex Q]`; generalised `Ctx::Draw`; pixel-verified with `varis_b.obj` + `varis.pcx` |
 | 7 | `5914a85` | terrain cell pipeline: cull (0040e260 integer cross + `DAT_006d0590`/`005b8` test) + layout-B append (006487f0) + flush signal (0064c8a0) in `src/render3d_terrain.hpp`; camera CB0/CB1 packing (00650910/0064f470) in `src/render3d_camera.hpp`; `render3d_view --terrain` (synthetic grid, layout-B triangle list); tests |
 | 8 | `da90636` | world-space lake scene (`src/render3d_scene.hpp`): DEPTHMAP -> layout-A mesh + palette texture + clean-room look-at/perspective; `InitMeshVerts` split in `render3d_pipeline.hpp`; `render3d_view --lake P`; tests |
-| 9 | `<this>` | in-game bridge (`src/render3d_bridge.hpp`, `pilkki --3d`): offscreen SDL_GPU scene -> per-frame readback -> `SDL_Texture` PLAY background under the SDL_Renderer HUD; angler re-drawn at a fixed spot; CMake defines the shader paths for `pilkki` |
+| 9 | `c5e4ae8` | in-game bridge (`src/render3d_bridge.hpp`, `pilkki --3d`): offscreen SDL_GPU scene -> per-frame readback -> `SDL_Texture` PLAY background under the SDL_Renderer HUD; angler re-drawn at a fixed spot; CMake defines the shader paths for `pilkki` |
 | 10 (next) | - | exact `004a7660` projection (cell array `+0x15248`, frame-delta `7c695c`, camera `+0x1ee88/90/98`); move the HUD to SDL_GPU and drop the readback bridge; models/entities (0040afd0) and the local rod |
 
 Shaders are re-authored GLSL (clean-room); no DXBC shipped. `glslc`
