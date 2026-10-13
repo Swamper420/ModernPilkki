@@ -41,32 +41,39 @@ Goal: `pilkki` opens window, loads lake, renders scene, plays sound, input works
 
 ## Next
 
-- Frame-tick stages + Present (`00649810`, vtable slot 8, `Present(1,0)`)
-  + device re-init (`0064ebb0`) + screen transition driver (`006304e0`,
-  phase + permille fades) + 7c6904 sub-state internals + per-screen
-  vtables (89-slot MENU_* registry) all decompiled; mode protocol
-  ported 1:1 (`src/state.hpp`, pending/active/phase + 00632560
-  deferred copy + 7c8790 pause return, wired via `ui::Step`); next:
-  per-screen fades + 0063ca80 input / 00638dd0 UI draw; new mechanics
-  behind flags
+- Per-screen fades: fade machine ported 1:1 (`src/state.hpp`: FadeTimer,
+  Screen, FadeUpdate=00651620, ScreenStep=006304e0, ScreenRun=0058aaf0,
+  ScreenFadeDur=005c8930; tests in `src/test_state.cpp`); decomp in
+  `docs/state-open.md` (linear 0..1000 permille over `durationMs`, 88-slot
+  registry, corrected duration table). Open: wire `ScreenRun`/`FadeUpdate`
+  into `ui::Game`/`main.cpp`. Per-screen fade *application* only verified
+  for MENU_MAIN (image alpha); no shared full-screen fade exists.
+- PLAY input `0063ca80` + in-game UI draw `00638dd0` walked
+  (`docs/state-open.md` §3/§4); the screen-class cluster
+  `006489c0/00648d80/00648f60/00649370/00649540/00649a30` is NOT the
+  fade code but the 2D D3D draw helpers (see docs/render.md §5).
 
-Sim open items (docs/sim.md delta 20): move-script table (pre-round
-countdown chain 9->...->0x12 durations, drill/bore durations), lake
-walk grid (corner bit 0x10) + real per-cell fish populations, VK->
-command map (00495930), results builder 004c2ce0, full 0048af00
-drilling sub-state walk, world-unit scale vs a captured run
+Sim open items (docs/sim.md delta 20): VK->command map (00495930 feeder),
+results builder 004c2ce0, full 0048af00 drill walk, move-script countdown
+durations, lake walk grid corner bit 0x10 + per-cell populations,
+world-unit scale -- tracked in `docs/sim-open.md`.
 
-## 3D render: decomp + port (open, the big remaining rock)
+## 3D render: decomp done (docs/render.md), SDL_GPU port is the remaining rock
 
-Task: find the PLAY-screen 3D scene draw, then port rendering 1:1
-(SDL3). Notes + recipe in docs/decomp-notes.md "Screen vtable dispatch
-map" + "Ghidra headless recipe". Lead: screen-class cluster
-`006489c0/00648d80/00648f60/00649370/00649540/00649a30` (methods at
-vtable disp 0x30 phase, 0x44/0x48/0x4c/0xac). Two decomp attempts were
-cancelled mid-run; raw dumps of wrong function (00640370) + vtable xref
-scan in /tmp/opencode/render-dec/ (volatile scratch). After
-docs/render.md lands: port as NEW files (`src/render3d.*` + viewer +
-tests) first, wire into `main.cpp` last pass.
+`docs/render.md` resolves the PLAY-screen scene: the lake is NOT screen
+MENU_PLAY (id 0x15, a menu state machine) but mode states 0x14/0x15 ->
+`00638dd0` -> `004a5d00` (world draw). Contains the full D3D11
+object/vtable map, 11 precompiled DXBC blobs (addr+size), 6 input
+layouts, 8 constant buffers, 6 draw wrappers, CPU-projected terrain
+chain, camera/matrix builders, a constants cheat-sheet, and an SDL_GPU
+port plan (`src/render3d.*`).
+
+Port: the 11 shaders must be re-authored (clean-room, DXBC not
+shippable) -> the only non-1:1 area. Resolve before coding: view-vs-
+projection assignment (`0064f470`) + fov/near/far builder, `00650910`
+CB0 layout, `004a5d00` this identity, `0064b350` fixed-buffer init.
+Port as NEW files (`src/render3d.*` + viewer + tests) first, wire into
+`main.cpp` last.
 
 Rules: match behavior first, flags for new mechanics, build stays
 `cmake -S src -B build && cmake --build build`, tests per system,
