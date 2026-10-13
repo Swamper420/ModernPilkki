@@ -1,5 +1,6 @@
 // Smallest assert: sniff WAV/Ogg/OSND, chunk iterator finds headers,
-// CRC + rebuild round-trip (synthetic chunk), corruption throws.
+// CRC + rebuild round-trip (synthetic chunk), corruption throws, and the
+// ported clip routing table matches the original registry (FUN_006267f0).
 // (Real-file check: tools/audio.py rebuilds 199/199, ffmpeg-decodable.)
 #include <cassert>
 #include <cstdio>
@@ -59,6 +60,39 @@ int main() {
   assert(threw);
 
   printf("audio tests pass\n");
+
+  // Routing table matches original clip registry (FUN_006267f0 dump):
+  using audio::ClipBySlot;
+  const audio::Clip *c;
+  c = ClipBySlot(50);  // drill: OSND/Ogg, crossfade loop from byte 308700
+  assert(c && c->src == 1 && c->loop == 2 && c->loopStart == 308700);
+  assert(c->volL == 3000 && c->volR == 1000);
+  c = ClipBySlot(51);  // reel-in: plain WAV one-shot
+  assert(c && c->src == 0 && c->loop == 0 && strstr(c->path, "NostoPlain"));
+  c = ClipBySlot(23);  // wind: 1 of 2 non-OSND plain-Ogg .sfo, same loader
+  assert(c && c->src == 1 && c->loop == 2 && c->loopStart == 132000);
+  c = ClipBySlot(90);  // menu music: Ogg crossfade loop, 5000/50 balance
+  assert(c && c->src == 1 && c->loop == 2 && c->volL == 5000 && c->volR == 50);
+  c = ClipBySlot(92);  // load music: Ogg one-shot
+  assert(c && c->src == 1 && c->loop == 0);
+  assert(ClipBySlot(54)->src == 0 && ClipBySlot(59)->src == 0);  // cast WAVs
+  assert(ClipBySlot(999) == nullptr);
+
+  // Music selection (FUN_005c8270): style 1..3 fixed, style 0 random.
+  uint32_t rng = 1;
+  assert(audio::MusicTrackForStyle(1, rng) == 90);
+  assert(audio::MusicTrackForStyle(2, rng) == 93);
+  assert(audio::MusicTrackForStyle(3, rng) == 94);
+  assert(audio::MusicTrackForStyle(7, rng) == 90);  // default
+  for (int i = 0; i < 50; i++) {
+    int t = audio::MusicTrackForStyle(0, rng);
+    assert(t == 90 || t == 93 || t == 94);
+  }
+  // Splash variant pick stays within pilkki_veteen slots 54..59.
+  for (int i = 0; i < 100; i++) {
+    int s = audio::SplashVariant(rng);
+    assert(s >= 54 && s <= 59);
+  }
 
   // Synth buffers are non-silent (playback fallback when files missing).
   auto tone = audio::play::Tone(440.0f, 0.1f);

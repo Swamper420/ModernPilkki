@@ -1,6 +1,9 @@
 // Audible game audio: synth SFX + WAV playback, no new deps.
-// .sfx = PCM WAV (SDL_LoadWAV), .mus/.sfo = OSND/Ogg (no SDL3 decoder,
-// synth fallback). Missing files = synth fallback, never hard-fails.
+// Routing matches original clip registry (FUN_006267f0, docs/audio.md):
+// .sfx = PCM WAV (SDL_LoadWAV): cast = pilkki_veteen_01..06 (random pick,
+// slots 54..59), reel-in = NostoPlain (slot 51). .mus/.sfo = OSND/Ogg; no
+// SDL3 Vorbis decoder and no new deps -> synth fallback (Drill stands in
+// for KairausPlain.sfo slot 50). Missing files = synth, never hard-fails.
 #pragma once
 #include <SDL3/SDL.h>
 
@@ -129,7 +132,13 @@ struct Player {
   SDL_AudioStream *stream = nullptr;
   bool muted = false;
   std::vector<float> ambient;
-  std::vector<float> splash;  // file hit, else empty = synth
+  // Original routing (docs/audio.md): splash/cast = pilkki_veteen_01..06.sfx
+  // (slots 54..59, one picked at random per trigger), reel-in = NostoPlain
+  // .sfx (slot 51). Both plain WAV -> real files. Drill = KairausPlain.sfo
+  // (slot 50) is OSND; no Vorbis decoder without new deps -> synth fallback.
+  std::vector<std::vector<float>> splash;  // 6 variants, empty = synth
+  std::vector<float> reel;                 // NostoPlain.sfx, empty = synth
+  uint32_t rng = 0x2f6e2b1u;               // LCG for variant pick (FUN_0059db20-style)
   int nSfx = 0, nMus = 0, nSfo = 0;
 
   Player() = default;
@@ -158,18 +167,32 @@ struct Player {
     SDL_PutAudioStreamData(stream, pcm.data(),
                            (int)(pcm.size() * sizeof(float)));
   }
-  void Drill() {  // auger growl: 75 Hz + 150 Hz octave
+  void Drill() {  // auger growl: 75 Hz + 150 Hz octave (KairausPlain.sfo = OSND, synth stand-in)
     auto a = Tone(75.0f, 0.5f, kRate, 0.5f);
     auto b = Tone(150.0f, 0.5f, kRate, 0.25f);
     for (size_t i = 0; i < a.size() && i < b.size(); i++) a[i] += b[i];
     Play(a);
   }
   void Jig() { Play(Tone(880.0f, 0.07f, kRate, 0.4f)); }
-  void Splash() {
-    if (!splash.empty()) { Play(splash); return; }
+  void Splash() {  // random of pilkki_veteen_01..06 (slots 54..59), else jingle
+    const std::vector<float> *v = nullptr;
+    for (const auto &c : splash)
+      if (!c.empty()) { v = &c; break; }
+    if (v) {
+      rng = rng * 1103515245u + 12345u;
+      size_t pick = splash.size();
+      size_t seen = 0, want = (rng >> 16) % 6;
+      for (size_t i = 0; i < splash.size(); i++)
+        if (!splash[i].empty() && seen++ == want) { pick = i; break; }
+      Play(splash[pick]);
+      return;
+    }
     Play(Jingle({660.0f, 880.0f}, 0.09f));
   }
-  void Catch() { Play(Jingle({523.25f, 659.25f, 783.99f, 1046.5f}, 0.11f)); }
+  void Catch() {  // reel-in: NostoPlain.sfx (slot 51), else jingle
+    if (!reel.empty()) { Play(reel); return; }
+    Play(Jingle({523.25f, 659.25f, 783.99f, 1046.5f}, 0.11f));
+  }
   void ToggleMute() {
     muted = !muted;
     if (!stream) return;
@@ -184,7 +207,9 @@ struct Player {
   }
 
   // Runtime scan of extracted tree (read-only, never committed).
-  // Counts clips, loads one splash WAV. Missing tree = synth, returns 0.
+  // Loads the original routing targets: 6x pilkki_veteen cast WAVs (slots
+  // 54..59) + NostoPlain.sfx reel-in (slot 51). Missing files = synth,
+  // never hard-fails. OSND/Ogg clips (.sfo/.mus) are counted only.
   int Scan(const char *root = "extracted/sfx") {
     try {
       std::error_code ec;
@@ -205,19 +230,29 @@ struct Player {
         else if (endswith(".mus")) nMus++;
         else if (endswith(".sfo")) nSfo++;
       }
-      std::string cand = std::string(root) + "/Effects/pilkki_veteen_01.sfx";
-      SDL_AudioSpec spec{};
-      uint8_t *buf = nullptr;
-      uint32_t blen = 0;
-      if (SDL_LoadWAV(cand.c_str(), &spec, &buf, &blen) && buf) {
-        splash = WavToMonoF32(spec, buf, blen);
-        if (splash.size() > (size_t)kRate * 5) splash.resize((size_t)kRate * 5);
-        SDL_free(buf);
+      auto loadWav = [&](const std::string &cand, std::vector<float> &out) {
+        SDL_AudioSpec spec{};
+        uint8_t *buf = nullptr;
+        uint32_t blen = 0;
+        if (SDL_LoadWAV(cand.c_str(), &spec, &buf, &blen) && buf) {
+          out = WavToMonoF32(spec, buf, blen);
+          if (out.size() > (size_t)kRate * 5) out.resize((size_t)kRate * 5);
+          SDL_free(buf);
+        }
+      };
+      splash.resize(6);
+      for (int i = 0; i < 6; i++) {
+        char name[64];
+        snprintf(name, sizeof(name), "/Effects/pilkki_veteen_0%d.sfx", i + 1);
+        loadWav(std::string(root) + name, splash[i]);
       }
+      loadWav(std::string(root) + "/Effects/NostoPlain.sfx", reel);
     } catch (...) {
     }
-    printf("audio scan: %d sfx %d mus %d sfo%s\n", nSfx, nMus, nSfo,
-           splash.empty() ? " (synth splash)" : " (file splash)");
+    size_t nsplash = 0;
+    for (const auto &c : splash) nsplash += !c.empty();
+    printf("audio scan: %d sfx %d mus %d sfo (%d/6 cast, reel %s)\n", nSfx,
+           nMus, nSfo, (int)nsplash, reel.empty() ? "synth" : "file");
     return nSfx + nMus + nSfo;
   }
 };

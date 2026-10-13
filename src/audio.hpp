@@ -101,4 +101,82 @@ inline std::vector<uint8_t> OsndToOgg(const uint8_t *p, size_t n) {
   return out;
 }
 
+// ---- Original clip registry (FUN_006267f0): slot -> routing ----
+// Sound manager (singleton @ DAT_007c8398) keeps 1000 slots at mgr+8+4*i,
+// each a 0x128-byte Clip: path[256], +0x100 pan-bias double, +0x108 src,
+// +0x10c loop mode, +0x110/+0x114 volL/volR permille, +0x118 crossfade
+// param, +0x120 loopStart PCM byte offset. Fields:
+// src  0 = WAV via CWaveSoundRead, 1 = Ogg/OSND via COggSoundRead
+//      (FUN_0059feb0). The page demuxer FUN_00401870 accepts BOTH `OSND`
+//      and `OggS` magics (DAT_00777888 compare vs "OggS"), so the two
+//      plain-Ogg Tuuli*.sfo ride the same loader — no special routing.
+// loop 0 = one-shot, 1 = loop (static buffer + DSBPLAY_LOOPING),
+//      2 = crossfade loop (dual voice A/B, FUN_0062ccb0).
+struct Clip {
+  int slot;
+  const char *path;
+  uint8_t src;
+  uint8_t loop;
+  int volL, volR;      // per-ear permille, 2000 = nominal
+  uint32_t loopStart;  // +0x120, PCM bytes; crossfade-loop restart point
+};
+
+inline const Clip kClips[] = {
+    {0,  "sfx/Menu/glag.sfx",              0, 0, 2000, 2000, 0},
+    {1,  "sfx/Menu/click.sfx",             0, 0, 2000, 2000, 0},
+    {20, "sfx/Ambient/laukaus.sfx",        0, 0, 2000, 2000, 0},
+    {21, "sfx/Ambient/koira2.sfx",         0, 0, 2000, 2000, 0},
+    {22, "sfx/Ambient/raakku.sfx",         0, 0, 2000, 2000, 0},
+    {23, "sfx/Ambient/Tuuli.sfo",          1, 2, 3000,  100, 132000},
+    {24, "sfx/Ambient/Tuuli2.sfo",         1, 2, 1100,  100, 0},
+    {25, "sfx/Human/ambient/Punnitus.sfo", 1, 2, 3000, 1000, 0},
+    {26, "sfx/Ambient/raakku2.sfx",        0, 0, 2000, 2000, 0},
+    {27, "sfx/Ambient/kuikka.sfo",         1, 0,    0,    0, 0},
+    {28, "sfx/Ambient/bassloop.sfo",       1, 1,    0,    0, 0},
+    {50, "sfx/Effects/KairausPlain.sfo",   1, 2, 3000, 1000, 308700},  // drill
+    {51, "sfx/Effects/NostoPlain.sfx",     0, 0, 2000, 2000, 0},       // reel in
+    {52, "sfx/Effects/Pohja.sfx",          0, 0, 2000, 2000, 0},       // bottom
+    {54, "sfx/Effects/pilkki_veteen_01.sfx", 0, 0, 2000, 2000, 0},     // cast
+    {55, "sfx/Effects/pilkki_veteen_02.sfx", 0, 0, 2000, 2000, 0},
+    {56, "sfx/Effects/pilkki_veteen_03.sfx", 0, 0, 2000, 2000, 0},
+    {57, "sfx/Effects/pilkki_veteen_04.sfx", 0, 0, 2000, 2000, 0},
+    {58, "sfx/Effects/pilkki_veteen_05.sfx", 0, 0, 2000, 2000, 0},
+    {59, "sfx/Effects/pilkki_veteen_06.sfx", 0, 0, 2000, 2000, 0},
+    {70, "sfx/Effects/kuiva_askel1.sfx",   0, 0, 2000, 2000, 0},       // footsteps
+    {71, "sfx/Effects/kuiva_askel2.sfx",   0, 0, 2000, 2000, 0},
+    {72, "sfx/Effects/kuiva_askel3.sfx",   0, 0, 2000, 2000, 0},
+    {73, "sfx/Effects/kuiva_askel4.sfx",   0, 0, 2000, 2000, 0},
+    {90, "sfx/Music/P2Menu.mus",           1, 2, 5000,   50, 0},       // menu
+    {91, "sfx/Music/P2Results.mus",        1, 0, 2000, 2000, 0},       // results
+    {92, "sfx/Music/P2Load.mus",           1, 0, 2000, 2000, 0},       // load
+    {93, "sfx/Music/P2Menu2.mus",          1, 0, 2000, 2000, 0},
+    {94, "sfx/Music/P2Menu3.mus",          1, 0, 2000, 2000, 0},
+};
+
+inline const Clip *ClipBySlot(int slot) {
+  for (const Clip &c : kClips)
+    if (c.slot == slot) return &c;
+  return nullptr;
+}
+
+// Music selection (FUN_005c8270, table DAT_007a60d0 = {-1,90,93,94}):
+// per-lake style 1..3 -> fixed track, style 0 -> random of the three,
+// anything else -> P2Menu. rng advanced by caller-visible LCG.
+inline int MusicTrackForStyle(int style, uint32_t &rng) {
+  static const int kMenu[3] = {90, 93, 94};
+  if (style >= 1 && style <= 3) return kMenu[style - 1];
+  if (style == 0) {
+    rng = rng * 1103515245u + 12345u;
+    return kMenu[(rng >> 16) % 3];
+  }
+  return 90;
+}
+
+// Splash/cast variant pick (random-variant rule of FUN_004c1390) over
+// pilkki_veteen slots 54..59.
+inline int SplashVariant(uint32_t &rng) {
+  rng = rng * 1103515245u + 12345u;
+  return 54 + ((rng >> 16) % 6);
+}
+
 }  // namespace audio
