@@ -418,6 +418,34 @@ screen/world-projected layout-B triangles (VS `0074dce8`/`0074eec0`). The
 steep; `004a7660` additionally clamps vertices into the viewport
 (`0061ec90`/`0061ecc0`).
 
+### 8.1 Cell record + cull (ported: `src/render3d_terrain.hpp`)
+
+`0040e260`'s face record (`geometry+0x37c`, stride `0x34`): `@0` three `i32`
+vertex indices; `@0x14` material byte; `@0x18` six `i32` UVs (3 pairs); `@0x30`
+flags (bit0 skip-cull, `0x1c` packed-RGB variant). The position array
+(`+0x374`) is `i32` x,y,z at stride `0xc` per vertex.
+
+Cull (integer cross, exact for screen-sized coords; the original round-trips the
+x deltas through `float`):
+`n = cross(B-A, C-A)`; reject if all 3 `z < -0x2bd` (-701), if `n == 0`, or if
+`nz / |n| > DAT_006d05b8` (0.0). The `|n|_max > 1000` (`DAT_006d0590`)
+normalisation is sign-neutral, so it never changes the decision.
+
+Append (`006487f0`): 3 layout-B verts `x,y` (the projected ints), `u,v =
+uv[material-scaled]`, `depth = 0x3a83126f` (0.001), `alpha = param_7[3]`. Returns
+`1` when the batch reached `DAT_007a6bb8` -> caller flushes via `0064c8a0`
+(`DrawIndexed`, resets the count). `2` = already full, `0` = appended, not full.
+
+### 8.2 Camera constant buffers (ported: `src/render3d_camera.hpp`)
+
+`00650910` builds CB0 (`0x50`): `transpose(camA)` (globals `7c9570..7c95ac`,
+`0064f470`'s `param_2`) followed by a viewport vec4
+`(2*offX/scrW, 2*offY/scrH, panX, panY)`, the first two rescaled by
+`win/rtTarget` when the letterbox flag `7c8b08` is 0. `0064f470` also uploads
+`transpose(camB)` (`param_4`) to CB1 (`7c8bf8`). The view-vs-projection
+assignment of `param_2`/`param_4` is still open (the caller passes a matrix
+derived from `model+0x5a0`; exact field map UNVERIFIED).
+
 ---
 
 ## 9. Draw order (one play frame, verified skeleton)
@@ -611,7 +639,9 @@ dynamic node, `0064ce70` maps it, `0064c610` releases.
 src/render3d.hpp      Ctx, resource pool, state mirrors, draw wrappers
 src/render3d.cpp      pipeline init (0064a790/0064ebb0), wrappers
 src/render3d_shaders  re-authored HLSL/GLSL + input layout tables
-src/render3d_terrain.cpp  004a7660/0040e260/006487f0
+src/render3d_terrain.hpp  0040e260/006487f0 cell cull + append (it7; 004a7660
+                          projection still open)
+src/render3d_camera.hpp   00650910/0064f470 CB0+CB1 packing (it7)
 src/render3d_model.cpp    0040b0b0/0040afd0/camera
 test_render3d.cpp     smallest checks: matrix mults, terrain cull, layout packing
 ```
@@ -625,15 +655,25 @@ Wire into `main.cpp` after the scene draws in the mode-0x14 path.
   (`0064f470` args), and the fov/near/far builder (not yet located).
 * Exact semantics of `0064f470` param_1/param_2 (camera object `+0x5a0` fields)
   and the id roll-up `00416850/60/70/00416840`.
-* `00650910` CB0 layout: 4×4 + viewport vec4 (fields inferred from
-  `7c9570..` + `7a6be0/be4` + `7c8b00/b04`); not fully decoded.
+* `00650910` CB0 layout: **resolved** (it7) -> `transpose(camA)` + viewport vec4
+  `(2*offX/scrW, 2*offY/scrH, panX, panY)`, rescaled by `win/rtTarget` when
+  `7c8b08 == 0`; `0064f470` CB1 = `transpose(camB)`. See §8.2, ported in
+  `src/render3d_camera.hpp`.
 * The 11 shader blobs' internal constants/instruction semantics (DXBC not
   decompiled) — only their binding/pointers are known.
 * `0064b350`'s four small buffers: exact init data and stride use per wrapper
   (stride values read from the `IASetVertexBuffers` args, sizes from CreateBuffer).
 * `004a5d00` `this` identity (`DAT_007c8948` camera struct passed as args;
   world pointer not yet named) and the top-down map second `004a5d00` call.
-* `006487f0` batch capacity (`DAT_007a6bb8`) and flush condition boundaries.
+* `006487f0` batch capacity (`DAT_007a6bb8`) is a runtime dynamic-buffer size,
+  not a PE constant; the flush/return-code semantics are **resolved** (it7, §8.1)
+  -> ported with the capacity as a parameter.
+* `004a7660` per-frame projection (still open): the terrain cell array at
+  `world+0x15248` (10 floats/cell), its initialiser, the frame delta
+  `DAT_007c695c` / `(&DAT_00777a20)` trick, and the camera fields at
+  `+0x1ee88/90/98`. The screen-position clamp uses `0061ec90/ecc0` (win w/h)
+  and `0059db20`; the `0067d495` x87 calls are an unresolved trig/normalise pair.
+  The integer cell **cull + append are ported** (§8.1) from the projected output.
 * Water surface / sky: `0064a5f0` clears the depth buffer mid-frame; the actual
   water shader selection between PS `7c8bb8` and `7c8bbc` and the per-water
   constants are open.

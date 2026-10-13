@@ -10,9 +10,11 @@
 
 #include "obj.hpp"
 #include "render3d.hpp"
+#include "render3d_camera.hpp"
 #include "render3d_layout.hpp"
 #include "render3d_math.hpp"
 #include "render3d_mesh.hpp"
+#include "render3d_terrain.hpp"
 
 // Iteration 4: the CMake shader step must have produced valid SPIR-V for the
 // re-authored triangle shaders. Pure file check -- no GPU device needed.
@@ -240,6 +242,86 @@ static void testLayouts() {
          v.depth == 0.5f && v.alpha == 0.8f);
 }
 
+// Iteration 7: terrain cell cull (0040e260) + layout-B append (006487f0).
+static void testTerrainCull() {
+  using namespace render3d;
+  int32_t pos[9] = {0, 0, -10, 10, 0, -10, 0, 10, -10};
+  int32_t v[3] = {0, 1, 2};
+  int32_t n[3];
+  assert(CellNormal(pos, v, n));
+  // AB=(10,0,0), AC=(0,10,0) -> n=(0,0,100); nz>0 -> culled.
+  assert(n[0] == 0 && n[1] == 0 && n[2] == 100);
+  assert(!CellVisible(pos, v));
+  // Reverse winding -> nz<0 -> visible.
+  int32_t v2[3] = {0, 2, 1};
+  assert(CellNormal(pos, v2, n) && n[2] == -100);
+  assert(CellVisible(pos, v2));
+  // Degenerate (zero area) -> neither.
+  int32_t flat[9] = {5, 5, -10, 5, 5, -10, 5, 5, -10};
+  assert(!CellNormal(flat, v, n) && !CellVisible(flat, v));
+  // z below -701 -> skipped.
+  int32_t deep[9] = {0, 0, -800, 10, 0, -800, 0, 10, -800};
+  assert(!CellVisible(deep, v2));
+  // Big normal (>1000) takes the normalise branch; the nz sign still decides.
+  int32_t big[9] = {0, 0, -10, 2000, 0, -10, 0, 2000, -10};
+  assert(!CellVisible(big, v));   // nz = +4e6
+  assert(CellVisible(big, v2));   // nz = -4e6
+}
+
+static void testTerrainAppend() {
+  using namespace render3d;
+  int32_t pos[9] = {0, 0, -10, 30, 0, -10, 0, 20, -10};
+  CellFace f{};
+  f.v[0] = 0; f.v[1] = 1; f.v[2] = 2;
+  f.material = 1;
+  f.uv[0] = 0; f.uv[1] = 0; f.uv[2] = 64; f.uv[3] = 0; f.uv[4] = 0; f.uv[5] = 32;
+  int32_t uvTab[4] = {1, 64, 32, 8};  // material 1 -> 64
+  std::vector<VertexB> batch;
+  bool full = TerrainAppend(batch, 6, pos, f, uvTab, 0.8f);
+  assert(batch.size() == 3 && !full);
+  assert(batch[0].x == 0.f && batch[0].y == 0.f);
+  assert(batch[1].x == 30.f && batch[1].y == 0.f);
+  assert(batch[2].x == 0.f && batch[2].y == 20.f);
+  assert(eq(batch[0].u, 0.f) && eq(batch[2].v, 32.f / 64.f));
+  assert(eq(batch[0].depth, kCellDepth) && eq(batch[0].alpha, 0.8f));
+  // Second append reaches the cap -> flush signal.
+  full = TerrainAppend(batch, 6, pos, f, uvTab, 0.8f);
+  assert(batch.size() == 6 && full);
+  // Already full -> still signals flush, no growth (006487f0 returns 2).
+  full = TerrainAppend(batch, 6, pos, f, uvTab, 0.8f);
+  assert(batch.size() == 6 && full);
+}
+
+// Iteration 7: CB0 (00650910) / CB1 (0064f470) packing.
+static void testCameraCbs() {
+  using namespace render3d;
+  Mat4 a = MatTranslate(1, 2, 3);
+  float cb[20];
+  BuildCb0(a, 0.f, 48.f, 800.f, 600.f, 1600.f, 1200.f, 800.f, 600.f, 0.1f, 0.2f,
+            true, cb);
+  // transpose moves the translation row -> column.
+  assert(eq(cb[3], 1) && eq(cb[7], 2) && eq(cb[11], 3));
+  assert(eq(cb[12], 0) && eq(cb[13], 0) && eq(cb[14], 0));
+  assert(eq(cb[16], 0.f));               // 2*offX/scrW
+  assert(eq(cb[17], 2.f * 48.f / 600.f));  // 0.16
+  assert(eq(cb[18], 0.1f) && eq(cb[19], 0.2f));
+  // letterbox off -> offsets scaled by win/rtTarget.
+  BuildCb0(a, 0.f, 48.f, 800.f, 600.f, 1600.f, 1200.f, 800.f, 600.f, 0.f, 0.f,
+            false, cb);
+  assert(eq(cb[17], (1200.f / 600.f) * (2.f * 48.f / 600.f)));
+  float cb1[16];
+  BuildCb1(MatTranslate(4, 5, 6), cb1);
+  assert(eq(cb1[3], 4) && eq(cb1[7], 5) && eq(cb1[11], 6));
+}
+
+static void testSyntheticGrid() {
+  using namespace render3d;
+  auto v = SyntheticGridVerts(3, 3, 200.f, 200.f);
+  assert(v.size() == 24u);  // 2x2 cells * 2 tris * 3 verts
+  assert(eq(v[0].x, 0.f) && eq(v[0].y, 0.f) && eq(v[0].u, 0.f) && eq(v[0].v, 0.f));
+  assert(SyntheticGridVerts(1, 3, 200.f, 200.f).empty());
+}
+
 int main() {
   // 16:9 target in a 4:3 window -> full width, letterbox top/bottom.
   render3d::Rect r = render3d::Letterbox(800, 600, 16.f / 9.f);
@@ -274,6 +356,10 @@ int main() {
   testShaderArtifacts();
   testQuad();
   testMeshA();
+  testTerrainCull();
+  testTerrainAppend();
+  testCameraCbs();
+  testSyntheticGrid();
 
   printf("render3d tests pass\n");
   return 0;

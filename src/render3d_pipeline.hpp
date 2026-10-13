@@ -480,4 +480,91 @@ inline void ReleaseMesh(SDL_GPUDevice* dev, MeshGpu& m) {
   m = MeshGpu{};
 }
 
+// ---------------------------------------------------------------------------
+// Iteration 7: terrain draw path. Same layout-B shaders as the quad (clean-room
+// stand-in for the terrain VS pair 0074dce8/0074eec0), TRIANGLELIST and no
+// index buffer -- the 006487f0 batch is a plain vertex list flushed by 0064c8a0
+// (00648f60 DrawIndexed with an identity index stream).
+// ---------------------------------------------------------------------------
+
+struct TerrainGpu {
+  SDL_GPUShader* vs = nullptr;
+  SDL_GPUShader* ps = nullptr;
+  SDL_GPUGraphicsPipeline* pipe = nullptr;
+  SDL_GPUSampler* sampler = nullptr;
+  SDL_GPUTexture* tex = nullptr;
+  SDL_GPUBuffer* vb = nullptr;
+  Uint32 vertexCount = 0;
+  bool Ok() const { return pipe != nullptr; }
+};
+
+inline void ReleaseTerrain(SDL_GPUDevice* dev, TerrainGpu& t);
+
+// `verts` is a layout-B triangle list (render3d_terrain.hpp). Texture falls back
+// to the checker. `vpW`/`vpH` are the viewport the pixel coords were built in.
+inline bool InitTerrain(SDL_GPUDevice* dev, SDL_GPUTextureFormat fmt,
+                        const char* vertSpv, const char* fragSpv,
+                        std::vector<VertexB> verts, TerrainGpu& t) {
+  std::vector<uint8_t> v = ReadSpirv(vertSpv), f = ReadSpirv(fragSpv);
+  if (!IsSpirv(v) || !IsSpirv(f) || verts.empty()) {
+    fprintf(stderr, "render3d: bad terrain SPIR-V or empty grid (%s / %s)\n",
+            vertSpv, fragSpv);
+    return false;
+  }
+  t.vs = MakeShader(dev, v, SDL_GPU_SHADERSTAGE_VERTEX, /*uniform_buffers=*/1);
+  t.ps = MakeShader(dev, f, SDL_GPU_SHADERSTAGE_FRAGMENT, /*uniform_buffers=*/0,
+                    /*samplers=*/1);
+  if (!t.vs || !t.ps) {
+    fprintf(stderr, "render3d: terrain shader failed: %s\n", SDL_GetError());
+    ReleaseTerrain(dev, t);
+    return false;
+  }
+
+  SDL_GPUColorTargetDescription ct{};
+  ct.format = fmt;
+  SDL_GPUGraphicsPipelineCreateInfo ci{};
+  ci.vertex_shader = t.vs;
+  ci.fragment_shader = t.ps;
+  ci.vertex_input_state.vertex_buffer_descriptions = kDescB;
+  ci.vertex_input_state.num_vertex_buffers = 1;
+  ci.vertex_input_state.vertex_attributes = kAttrB;
+  ci.vertex_input_state.num_vertex_attributes = 4;
+  ci.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+  ci.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+  ci.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+  ci.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+  ci.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
+  ci.target_info.color_target_descriptions = &ct;
+  ci.target_info.num_color_targets = 1;
+  t.pipe = SDL_CreateGPUGraphicsPipeline(dev, &ci);
+  if (!t.pipe) {
+    fprintf(stderr, "render3d: terrain pipeline failed: %s\n", SDL_GetError());
+    ReleaseTerrain(dev, t);
+    return false;
+  }
+
+  t.sampler = MakeSampler(dev);
+  std::vector<uint8_t> px = CheckerRgba(64, 64);
+  t.tex = UploadTexture2D(dev, px.data(), 64, 64);
+  t.vb = UploadBuffer(dev, SDL_GPU_BUFFERUSAGE_VERTEX, verts.data(),
+                      (Uint32)(verts.size() * sizeof(VertexB)));
+  t.vertexCount = (Uint32)verts.size();
+  if (!t.sampler || !t.tex || !t.vb) {
+    fprintf(stderr, "render3d: terrain resource failed: %s\n", SDL_GetError());
+    ReleaseTerrain(dev, t);
+    return false;
+  }
+  return true;
+}
+
+inline void ReleaseTerrain(SDL_GPUDevice* dev, TerrainGpu& t) {
+  if (t.pipe) SDL_ReleaseGPUGraphicsPipeline(dev, t.pipe);
+  if (t.vs) SDL_ReleaseGPUShader(dev, t.vs);
+  if (t.ps) SDL_ReleaseGPUShader(dev, t.ps);
+  if (t.sampler) SDL_ReleaseGPUSampler(dev, t.sampler);
+  if (t.tex) SDL_ReleaseGPUTexture(dev, t.tex);
+  if (t.vb) SDL_ReleaseGPUBuffer(dev, t.vb);
+  t = TerrainGpu{};
+}
+
 }  // namespace render3d
