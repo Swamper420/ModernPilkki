@@ -61,10 +61,38 @@ Goal: `pilkki` opens window, loads lake, renders scene, plays sound, input works
   `006489c0/00648d80/00648f60/00649370/00649540/00649a30` is NOT the
   fade code but the 2D D3D draw helpers (see docs/render.md §5).
 
-Sim open items (docs/sim.md delta 20): VK->command map (00495930 feeder),
-results builder 004c2ce0, full 0048af00 drill walk, move-script countdown
-durations, lake walk grid corner bit 0x10 + per-cell populations,
-world-unit scale -- tracked in `docs/sim-open.md`.
+Sim gameplay 1:1 (night of 2026-10-14, per-system docs authoritative,
+`docs/sim.md` §8 errata supersedes its first-pass claims):
+
+- `3b5554d` opponent AI: event/action queue + `AI_STATE_{WALKING,
+  DRILLING, FISHING, FISH_TAKE_UP}` machines (`src/botai.hpp`,
+  docs/sim-ai.md)
+- `6a457be` round structure: move script (`<STARTMOVES>` of
+  human2.3ds), drill chain 9→0x12, end hold 2300 ms, results rows
+  (`src/timeline.hpp`, `src/results.hpp`, docs/sim-timeline.md /
+  docs/sim-results.md)
+- `a7b9ec9` bite records 0x70 + candidate walk + rate window
+  (`src/bite.hpp`, docs/sim-bite.md)
+- `446326c` controller: drill run (`stepMs=(rand(4)+13)*200`, stop
+  rolls) + fish fight state 0xd + WalkMs (`src/controller.hpp`,
+  docs/sim-controller.md)
+- `3dc1219` DATA1 fish stock loader (deobf keys `006dbfa8`, species
+  from `data/nyky/data0.dat`) (`src/fishstock.hpp`, docs/sim-stock.md)
+- `38e22f8` click orders + 16-case walkability grid + `test_game` fix
+  (`src/walkgrid.hpp`, docs/sim-walk.md)
+- `a6bddc3` sim core integration (`game.hpp` delegates; one RNG)
+- `9c5a642` loop wiring: real stock at SetLake, round end 1:1, results
+  rows on the Results screen, bots drive real sim sessions via
+  `botai::Hooks`
+
+Sim open items: `004b6990` walk-grid builder (type.dat/depth.dat
+corner bytes — `SetWalkGrid` waits on it), `005f8ff0` candidate-eval
+chain + `005f8490` size roll (`Stock::Evaluate` seam), `004bc340` fish
+migration (static-stock ceiling), `00487560(+0x340)` Nosto duration,
+`0059fbe0` bot quality curve (identity stand-in), results `0x2bc`
+value source + MENU_RESULTS_* row layout handlers, `00467c30`
+keyframe eval (presentation), event id 0x10 + RTTI names for unported
+state ids, `+0x33c` verdict source (net).
 
 ## 3D render: decomp done (docs/render.md), SDL_GPU port is the remaining rock
 
@@ -131,13 +159,14 @@ drawn pixels, both checker colours (per-frame dynamic VB rebuild verified).
 ### Known issues (pre-existing, unrelated to the 3D work)
 
 - The repo `build/` is configured `Release` (`-DNDEBUG`) so **all `assert`
-  tests are compiled out** and "pass" vacuously. An assert-on build
-  (no `CMAKE_BUILD_TYPE`) exposes: `test_game` fails at the walk test —
-  `game::Click` rejects an out-of-bounds target (`Walkable` max
-  `(w-1)*600`), but the test expects a walk that stops at that wall
-  (docs/sim.md delta 3 walk grid, still open). Fix `004b0bb0`/`00495930`
-  first, then re-point the test. `test_bots` fixed (`6000` ticks; a bot's
-  first catch needs >= ~720 ticks, `600` could never observe one).
+  tests are compiled out** and "pass" vacuously — use an assert-on build
+  (`cmake -S src -B <dir> -DCMAKE_BUILD_TYPE=`) for the real gate; all
+  30 test binaries pass there as of `9c5a642`. (The walk-test failure
+  this note used to track was real and is fixed in `38e22f8`: out-of-
+  bounds clicks are accepted and stop at the wall — the test expected
+  the original behavior, `game::Click` was wrong.) `test_bots` fixed
+  earlier (`6000` ticks; a bot's first catch needs >= ~720 ticks,
+  `600` could never observe one).
 
 Rules: match behavior first, flags for new mechanics, build stays
 `cmake -S src -B build && cmake --build build`, tests per system,
