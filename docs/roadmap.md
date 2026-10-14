@@ -25,12 +25,12 @@ input works — is reached (see Done), but that is a demo, not the destination.
   system SDL2 is sdl2-compat 2.32 (SDL3-backed) and forwards unmapped event
   `0x207`; rust-sdl2's safe event pump aborts on it — skeleton polls
   `SDL_PollEvent` at sys level and ignores unknown types (as a C SDL2 app).
-- Rust `.ves` parity (`rust/src/ves.rs`, 3 tests: synthetic parse, hash
-  vs game depth table, real-lake golden counts; `src/ves.hpp` oracle):
-  sections + hash + objpos + DEPTHMAP/TYPEMAP grids. Subagent session cut
-  short mid-task — code is green (8/8 `cargo test`) but the port was never
-  cross-checked assert-by-assert against `test_ves.cpp`'s 16 goldens. Next
-  agent: diff the two test surfaces and close any gap before trusting it.
+- Rust `.ves` parity (`rust/src/ves.rs`, 6 tests; `src/ves.hpp` oracle):
+  sections + hash + objpos + DEPTHMAP/TYPEMAP grids. 14/14 `test_ves.cpp`
+  assert statements (20 conditions; "16 goldens" was a miscount) asserted
+  1:1 in Rust with same inputs/expected values; remaining Rust asserts
+  (error strings, unchecked-section flag, real-lake counts) verified real
+  against `src/ves.hpp`/`docs/file-formats.md`.
 - .ves sections + hash + objpos (`src/ves.hpp`)
 - .spr decode + viewer (`src/spr.hpp`)
 - .obj mesh + verts/faces/UV + viewer (`src/obj.hpp`, `src/objview.cpp`)

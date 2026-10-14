@@ -254,7 +254,7 @@ mod tests {
         assert_eq!(secs[1].tag, "DEPTH_TABLE");
         assert!(secs[1].checked);
         assert_eq!(secs[0].trailer, 0x1234_5678);
-        assert!(!secs[0].checked); // hash of 4 zero bytes is 0x5A, not the sentinel
+        assert!(!secs[0].checked); // hash of 4 zero bytes is 0x5A5A5A5A, not the sentinel
     }
 
     #[test]
