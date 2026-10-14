@@ -397,12 +397,13 @@ inline bool Draw(SDL_Renderer *r, int w, int h, const ui::Game &g,
       float ry = (float)h / 2 - 90 * s;
       TextShade(r, a.big, 40 * s, ry, s, white, g.lakeName);
       ry += 34 * s;
-      snprintf(b, sizeof b, "Kalojen yhteispaino %.1f kg", hud.kg);
-      TextShade(r, a.small, 40 * s, ry, s * 1.5f, yellow, b);
-      ry += 20 * s;
-      snprintf(b, sizeof b, "Isoin kala %.1f kg", hud.biggest);
-      TextShade(r, a.small, 40 * s, ry, s * 1.5f, yellow, b);
-      ry += 20 * s;
+      // The verified results.hpp rows (docs/sim-results.md): total weight
+      // 0x96, biggest 0x24c, "No bites." 0xa7, bite flag 0xad, Initial
+      // drill 0x2bc as available. Same rows as the ui::Render fallback.
+      for (auto &row : ui::Rows(hud)) {
+        TextShade(r, a.small, 40 * s, ry, s * 1.5f, yellow, ui::RowText(row));
+        ry += 20 * s;
+      }
       snprintf(b, sizeof b, "Kaloja %d  Reikia %d", hud.catches, hud.holes);
       TextShade(r, a.small, 40 * s, ry, s * 1.5f, white, b);
       ry += 30 * s;

@@ -48,6 +48,11 @@ static std::vector<uint8_t> Read(const char *p) {
   return d;
 }
 
+// DATA1 fish species tables (docs/sim-stock.md); game::SetLake loads the
+// stock from lake file + this file, degrading to empty/synthetic when
+// either is missing.
+static const char *kSpeciesPath = "extracted/data/nyky/data0.dat";
+
 // Never hard-fails: missing/unparseable files -> empty scene + defaults.
 static bool LoadScene(const char *lakePath, const char *objPath, bool snow,
                       ves::Grid &depth, ves::Grid &typemap, bool &hasType,
@@ -238,8 +243,17 @@ int main(int argc, char **argv) {
   // deleted with deltas 8/9.
   fish.newMechanics = false;
   fish.Seed(0x1234);
-  fish.SetLake(depth.cells.empty() ? nullptr : &depth,
-               hasType ? &typemap : nullptr, &groups);
+  // I2: SetLake carries the lake file + species paths so fishstock::Stock
+  // loads the real DATA1 populations (game.hpp degrades to the synthetic
+  // stand-in when files are missing).
+  auto setFishLake = [&] {
+    fish.SetLake(depth.cells.empty() ? nullptr : &depth,
+                 hasType ? &typemap : nullptr, &groups, activeLake,
+                 kSpeciesPath);
+    printf("stock %zu fish (%s)\n", fish.StockCount(),
+           activeLake.empty() ? "no lake file" : activeLake.c_str());
+  };
+  setFishLake();
   ui::Game uim;  // TITLE->LAKE_SELECT->PLAY->PAUSE->RESULTS; CLI skips menus
   ui::Init(uim, ui::ScanLakes("extracted/lakes"));
   menu::Setup setup;  // LakeSelect comp row: time limit + bots
@@ -250,8 +264,8 @@ int main(int argc, char **argv) {
   size_t compLogSeen = 0;
   if (useBots) {
     auto chat = offline::ParseScript(offline::LoadScriptText());
-    comp.Init(offline::Roster(chat), chat, setup.bots, setup.timeSec * 60,
-              0xB07);
+    comp.Init(offline::Roster(chat), chat, setup.bots, setup.timeSec * 1000,
+              0xB07, depth.cells.empty() ? nullptr : &depth, activeLake);
     printf("bots %zu chat %zu\n", comp.bots.size(), comp.chat.size());
   }
   tick::Driver driver;  // quit protocol; game updates via direct calls
@@ -265,7 +279,6 @@ int main(int argc, char **argv) {
   float lineX = 0, lineY = 0;
   bool run = true;
   int frames = 0;
-  float endHoldMs = 0;  // round-end hold before Results (00650fe0 2000ms)
   while (run && (!cap || frames < cap)) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
@@ -337,14 +350,20 @@ int main(int argc, char **argv) {
     clock.Update(SDL_GetTicks());
     snd.Update();
     ui::Step(uim);  // 00640370 pass: run driver phases (steady = no-op)
-    if (uim.state == ui::State::Play && uim.timeLeft <= 0) {
-      // Round-end hold (game::kEndHoldMs, 00650fe0 end timer) -> Results.
-      endHoldMs += (float)clock.delta;
-      if (endHoldMs >= (float)game::kEndHoldMs) ui::To(uim, ui::State::Results);
-    } else {
-      ui::Update(uim, clock.delta / 1000.f);  // Play countdown -> Results
-    }
+    float dtSec = clock.delta / 1000.f;
+    ui::Update(uim, dtSec);  // Play countdown only ("time up" driver)
     bool simLive = uim.state == ui::State::Play;  // Pause/menus freeze sim
+    // Round end 1:1 (docs/sim-timeline.md §5): time limit (min(minutes,60)
+    // * 60000 ms, ui::timeLeft) -> end-mode rising edge (RoundEndMode/
+    // EndModeEdge) -> hold game::kEndHoldMs (2300) -> 00483890(2,0)
+    // freeze -> ui::To(Results). The original's time-up -> end-mode link is
+    // unported (§6 open): at time-up the host forces the 00477880 NOSTO
+    // end mode (0x25) when the sim is not already in a round-end mode, and
+    // that time-up transition is the rising edge (game.hpp re-edges on
+    // mode-set entry only, so a sitting player's old edge is not re-fired).
+    if (simLive && uim.timeLeft <= 0 && uim.endHold < 0 &&
+        !fish.RoundEndMode())
+      fish.LineStage();
     if (simLive)  // sim runs in <=999ms slices (00471810), stall-safe
       tick::Slices(clock.delta, [&](uint32_t ms) {
         fish.Update(keys, ms / 1000.f);
@@ -370,6 +389,14 @@ int main(int argc, char **argv) {
           if (useBots) comp.AddPlayerCatch((int)(fish.lastKg * 1000));
         }
       });
+    // End timer fire path (docs/sim-timeline.md §5): 004749b0() == 0 waits
+    // out a pending action (ui::EndHold pending); expiry = the
+    // 00483890(2, 0) freeze (the slice feed above stops with the state
+    // change) then Results (0x15).
+    if (simLive && uim.timeLeft <= 0 &&
+        ui::EndHold(uim, dtSec, fish.RoundEndMode(), fish.EndModeEdge(),
+                    fish.Fighting()))
+      ui::To(uim, ui::State::Results);
     // 00488060: line stays out while at a hole with an active lure.
     lineOut = fish.LineOut();
     if (lineOut) {
@@ -380,7 +407,7 @@ int main(int argc, char **argv) {
       }
     }
     if (simLive && useBots) {
-      comp.Tick();
+      comp.Tick(clock.delta);  // botai machines, dt-driven (docs/sim-ai.md §6)
       for (; compLogSeen < comp.log.size(); compLogSeen++) {
         auto &c = comp.log[compLogSeen];
         if (c.bot == -2) continue;
@@ -407,17 +434,16 @@ int main(int argc, char **argv) {
       }
 #endif
       fish.Seed(0x1234);
-      fish.SetLake(depth.cells.empty() ? nullptr : &depth,
-                   hasType ? &typemap : nullptr, &groups);
+      setFishLake();
       cam = render::Camera{};
       cfx = camera::Fx{};
       pl = render::Player{};
       holes.clear();
       lineOut = false;
-      endHoldMs = 0;
       if (useBots) {
         auto names = offline::Roster(comp.chat);
-        comp.Init(names, comp.chat, setup.bots, setup.timeSec * 60, 0xB07);
+        comp.Init(names, comp.chat, setup.bots, setup.timeSec * 1000, 0xB07,
+                  depth.cells.empty() ? nullptr : &depth, activeLake);
         compLogSeen = 0;
       }
       rules.timeSec = setup.timeSec;  // menu setup row wins over file default
@@ -425,17 +451,16 @@ int main(int argc, char **argv) {
     }
     if (uim.needRestart) {  // Results R: same lake, fresh run
       fish.Seed(0x1234);
-      fish.SetLake(depth.cells.empty() ? nullptr : &depth,
-                   hasType ? &typemap : nullptr, &groups);
+      setFishLake();
       cam = render::Camera{};
       cfx = camera::Fx{};
       pl = render::Player{};
       holes.clear();
       lineOut = false;
-      endHoldMs = 0;
       if (useBots) {
         auto names = offline::Roster(comp.chat);
-        comp.Init(names, comp.chat, setup.bots, setup.timeSec * 60, 0xB07);
+        comp.Init(names, comp.chat, setup.bots, setup.timeSec * 1000, 0xB07,
+                  depth.cells.empty() ? nullptr : &depth, activeLake);
         compLogSeen = 0;
       }
       ui::BeginPlay(uim, uim.lakeName, uim.rules);
@@ -499,6 +524,7 @@ int main(int argc, char **argv) {
         hud.biggest = fish.biggest;
         hud.lineDepth = fish.lineDepth;
         hud.bite = fish.Biting();
+        hud.bites = fish.BiteCount();  // bite-ring counter (results rows)
         for (int i = 0; i < game::Game::kBaitTypes; i++)
           for (int j = 0; j < game::Game::kLureSlots; j++)
             hud.baitLeft += fish.bait[i][j];

@@ -17,7 +17,9 @@
 #include <string>
 #include <vector>
 
+#include "results.hpp"
 #include "state.hpp"
+#include "timeline.hpp"
 #include "ves.hpp"
 
 namespace ui {
@@ -152,6 +154,7 @@ struct Hud {
   int lineDepth = 10;  // game::kLineM bucket
   int baitLeft = 0;    // sum of the 4x16 bait grid
   bool bite = false;
+  int bites = 0;  // bite-ring counter (session +0x730), results row gate
 };
 
 struct Game {
@@ -168,6 +171,9 @@ struct Game {
   std::string lakeName = "(none)";
   Rules rules;
   float timeLeft = kDefaultTimeSec;
+  // Round-end timer (docs/sim-timeline.md §5), seconds since the end-mode
+  // rising edge; -1 = the 00650fe0 0x8fc timer has not been created.
+  float endHold = -1;
 };
 
 inline void Init(Game &g, std::vector<LakeEntry> lakes) {
@@ -198,7 +204,9 @@ inline void BeginPlay(Game &g, const std::string &name, Rules r) {
   g = std::move(fresh);
   g.lakeName = name;
   g.rules = r;
-  g.timeLeft = (float)r.timeSec;
+  // Round time limit = min(minutes, 60) * 60000 ms (docs/sim-timeline.md
+  // §5 driver); timeLeft hits 0 to start the end sequence.
+  g.timeLeft = (float)std::min(r.timeSec, 60 * 60);
   To(g, State::Play);
 }
 
@@ -243,15 +251,60 @@ inline void Press(Game &g, uint32_t id) {
   }
 }
 
-// Countdown in Play only; expiry -> Results. Main swallows held keys on
-// expiry so a held Enter does not leak into Results (Enter = lakes there).
+// Countdown in Play only; it is the "time up" driver (min(minutes,60) *
+// 60000 ms). No Results jump here: round end is the docs/sim-timeline.md
+// §5 sequence (EndHold below) and main owns the freeze.
 inline void Update(Game &g, float dt) {
   if (g.state != State::Play) return;
   g.timeLeft -= dt;
-  if (g.timeLeft <= 0) {
-    g.timeLeft = 0;
-    To(g, State::Results);
+  if (g.timeLeft < 0) g.timeLeft = 0;
+}
+
+// Round end 1:1 (docs/sim-timeline.md §5): time limit (timeLeft -> 0) ->
+// end-mode rising edge (00476180 || 00476160) -> kEndHoldMs hold (00650fe0
+// end timer 0x8fc = 2300 ms; 2000 is the fade ramp target) -> 00483890(2,0)
+// freeze -> Results (0x15). The original's time-up -> end-mode link is
+// unported (§6 open): the host forces the 00477880 NOSTO end mode at
+// time-up and passes that transition as `edge` (game.hpp only re-edges on
+// mode-set entry, so a sitting player's old edge is not re-fired).
+// pending = the 004749b0 "nothing pending" gate (e.g. a live fight): the
+// timer runs but the fire waits it out. True = freeze + To(Results).
+inline bool EndHold(Game &g, float dt, bool endMode, bool edge,
+                    bool pending) {
+  if (g.state != State::Play || g.timeLeft > 0) return false;
+  if (g.endHold < 0) {
+    if (!(endMode || edge)) return false;  // not in the end mode yet
+    g.endHold = 0;                         // end timer created on the edge
   }
+  g.endHold += dt;
+  return g.endHold * 1000.f >= (float)timeline::kEndTimerMs && !pending;
+}
+
+// Results rows (docs/sim-results.md): the verified results.hpp rows built
+// from the player tallies, plus the conditional rows "as available" — 0xad
+// the bite-flag latch (any bite this round) and 0x2bc Initial drill (value
+// source open in the docs; label-only once a hole was drilled).
+inline std::vector<results::Row> Rows(const Hud &h) {
+  results::Tally t;
+  t.count = h.catches;
+  t.totalG = h.kg * 1000.0;
+  t.biggestG = (int)(h.biggest * 1000.0 + 0.5);
+  t.bites = h.bites;
+  std::vector<results::Row> rows = results::Build(t);
+  if (h.bites > 0)
+    rows.push_back({results::kRowBiteFlag, "Bite indicator flag is up!", -1});
+  if (h.holes > 0)
+    rows.push_back({results::kRowInitialDrill, "Initial drill", -1});
+  return rows;
+}
+
+// Row line: grams -> "x.y kg" (docs/sim-results.md: rows print kg with
+// decimals); label-only rows pass through. Finnish labels ship as-is.
+inline std::string RowText(const results::Row &r) {
+  if (r.valueG < 0) return r.text;
+  char b[128];
+  snprintf(b, sizeof b, "%s %.1f kg", r.text, r.valueG / 1000.0);
+  return b;
 }
 
 inline std::string MmSs(float t) {
@@ -302,8 +355,11 @@ inline void Render(const Game &g, SDL_Renderer *r, const Hud &hud) {
       if (g.state == State::Play)
         line(3, "Arrows move / Enter drill / Space jig / PgUp PgDn line / wheel +- zoom / M mute / Esc pause");
       if (g.state == State::Pause) line(4, "PAUSED - Enter/Esc resume");
-      if (g.state == State::Results)
-        line(4, "RESULTS - R restart / Enter lakes / Esc quit");
+      if (g.state == State::Results) {
+        int row = 4;
+        for (auto &r : Rows(hud)) line(row++, RowText(r));  // sim-results rows
+        line(row, "RESULTS - R restart / Enter lakes / Esc quit");
+      }
       break;
   }
 }

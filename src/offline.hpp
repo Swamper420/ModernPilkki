@@ -2,17 +2,24 @@
 // Roster/chat parsed from botinfo.dat decoded text (NAME:/FI:/EN: lines,
 // cf. tools/botinfo.py, FUN_0059b070). No sockets here: netplay stubbed
 // disabled, offline is default (main.cpp never opens a socket).
+// Agents: each bot drives its own game::Game session through the botai
+// machines (docs/sim-ai.md §6) via botai::Hooks; the toy wander/drill
+// TickBot survives behind Comp::useToy as a fallback.
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <random>
 #include <string>
 #include <sys/stat.h>
 #include <vector>
 
+#include "botai.hpp"
 #include "botinfo.hpp"
+#include "game.hpp"
 
 namespace offline {
 
@@ -167,26 +174,100 @@ inline int AISyokoMs() { return 1000; }
 inline int AITempMs() { return 500; }
 inline int AISinkingMs() { return 3000; }
 
-// Comp::Tick runs per frame (~60 fps), so AI durations convert to ticks.
+// Toy AI durations in 60 fps ticks (legacy TickBot fallback only; the
+// botai machines take ms directly).
 inline int BotTicks(int ms) { return (int)((double)ms / (1000.0 / 60.0) + 0.5); }
+
+// Chat bubble pick: own name's line first, else any (FI fallback in Text).
+inline const ChatLine *PickLine(const std::vector<ChatLine> &chat,
+                                const std::string &name, std::mt19937 &rng) {
+  for (auto &c : chat)
+    if (c.name == name) return &c;
+  if (!chat.empty()) {
+    std::uniform_int_distribution<size_t> ci(0, chat.size() - 1);
+    return &chat[ci(rng)];
+  }
+  return nullptr;
+}
+
+// botai::Hooks wired to one per-bot game::Game session (docs/sim-ai.md §6
+// seam: the machines call the same drill/walk/strike/reel/bite primitives
+// as the player). The 0xd fight is the PLAYER's mini-game — the AI
+// resolves through the 00478210 two-roll instead, so Jig never starts a
+// fight (004771d0 is the jig/bite-request action).
+struct GameHooks : botai::Hooks {
+  game::Game *g = nullptr;
+  int roundLeftSec = 0;  // 004383c0 round clock readback source
+
+  int DrillStart() override {  // 004764b0: 1 ok, 4 hole here
+    g->DrillStart();
+    return g->Mode() == 6 ? 1 : 4;
+  }
+  void BoreBegin() override { g->BoreBegin(); }  // 00477310
+  void BoreEnd() override { g->BoreEnd(); }      // 00477220
+  void LineStage() override { g->LineStage(); }  // 00477880 -> 0x25
+  void Jig() override {                          // 004771d0
+    if (!g->Biting()) g->Strike();  // rate-limited bite request, no fight
+  }
+  int LandFish(botai::Bot &, const botai::Bite &) override {
+    return g->LandFish() ? (int)(g->lastKg * 1000.0) : 0;  // 00473320
+  }
+  void FishSuccess(botai::Bot &, const botai::Bite &) override {
+    g->LandFish();  // 00473280 lands too (docs/sim-controller.md §2.3)
+  }
+  void FishEscaped(botai::Bot &, const botai::Bite &) override {
+    g->FishEscaped();  // 004732d0
+  }
+  // 004ba5e0 poll: the session's own Ambient/strike paths make the bite;
+  // the AI syoko pump reads it here and rolls the strike decision.
+  bool BiteRoll(botai::Bot &, botai::Bite &bt) override {
+    const bite::Record *r = g->ActiveBite();
+    if (!r) return false;
+    bt.type = r->type;
+    bt.outcome = r->outcome;
+    bt.pCatch = r->catchP;
+    bt.pFail = r->failP;
+    bt.weight = r->V();  // 00590c10 record weight (grams)
+    return true;
+  }
+  bool ShallowAtDrillPoint() override {  // 00472480: depth < 30 raw cells
+    return g->DepthAt(g->x, g->y) < 30.0f;
+  }
+  bool ModeIs(int m) override { return g->Mode() == m; }
+  bool LakeModel() override { return g->GridW() > 2; }  // +0x528 has lake
+  int ClockSeconds() override { return roundLeftSec; }  // 004383c0
+  // 0059fbe0 quality curve is unported (docs/sim-ai.md §5 open);
+  // ponytail: identity stand-in so the verified strike shape works —
+  // max of skill+1 draws vs rand%100 (more draws at higher skill).
+  int ActivityQuality(int r) override { return r; }
+};
 
 struct Bot {
   std::string name;
   float skill = 0.5f;  // 0..1 catch size/rate variance
-  float x = 0, y = 0;  // wander pos, -1..1 world
-  int state = 0;       // 0 wander, 1 drill, 2 catch flash
-  int t = 0;           // ticks to next state change
+  float x = 0, y = 0;  // legacy toy wander pos (TickBot fallback)
+  int state = 0;       // legacy toy state (TickBot fallback)
+  int t = 0;           // legacy toy ticks to next change (TickBot fallback)
   int score = 0;       // total grams
   int count = 0;
   std::string bubble;  // current chat bubble
-  int bubbleTtl = 0;
+  int bubbleTtl = 0;   // ms remaining
   int Skill10() const {  // AI skill 0..10 from the 0..1 variance
     int s = (int)(skill * 10 + 0.5f);
     return s < 0 ? 0 : (s > 10 ? 10 : s);
   }
+  // botai-driven session (docs/sim-ai.md §6). ponytail: each bot owns a
+  // full game::Game + its own DATA1 stock load (N lakes for N bots); share
+  // one stock if load time ever matters.
+  botai::Bot ai;
+  std::unique_ptr<game::Game> g;
+  std::unique_ptr<GameHooks> hooks;
+  bool walkPending = false;  // a click-to-move order is in flight
+  int aiPrevState = 0;       // entry-edge glue (FISHING timer arming)
 };
 
-// One bot tick. Returns catch grams (0 = none).
+// Legacy toy AI (fallback behind Comp::useToy; the botai machines are the
+// default). One toy tick. Returns catch grams (0 = none).
 inline int TickBot(Bot &b, const std::vector<ChatLine> &chat,
                    std::mt19937 &rng) {
   if (b.bubbleTtl > 0 && --b.bubbleTtl == 0) b.bubble.clear();
@@ -214,18 +295,9 @@ inline int TickBot(Bot &b, const std::vector<ChatLine> &chat,
     // AI_ei_syo_short wait before the next bite attempt.
     b.t = BotTicks(AIEiSyoMs((int)(rng() & 0x7fffffff), b.Skill10()));
     // Chat bubble: prefer own name's line, else any (FI fallback in Text).
-    const ChatLine *pick = nullptr;
-    for (auto &c : chat)
-      if (c.name == b.name) {
-        pick = &c;
-        break;
-      }
-    if (!pick && !chat.empty()) {
-      std::uniform_int_distribution<size_t> ci(0, chat.size() - 1);
-      pick = &chat[ci(rng)];
-    }
+    const ChatLine *pick = PickLine(chat, b.name, rng);
     b.bubble = pick ? b.name + ": " + pick->Text() : b.name + ": kala!";
-    b.bubbleTtl = 180;
+    b.bubbleTtl = 180 * 16;  // ~180 toy frames at 16 ms
     b.state = 2;  // catch flash, falls through to wander next tick
     return grams;
   }
@@ -236,13 +308,19 @@ struct Comp {
   std::vector<Bot> bots;
   std::vector<ChatLine> chat;
   int playerScore = 0, playerCount = 0;
-  int countdown = 0;  // ticks remaining; 0 = no limit / finished
+  int countdown = 0;  // ms remaining; 0 = no limit / finished
   std::mt19937 rng{12345};
   std::vector<Catch> log;
+  bool useToy = false;  // legacy TickBot fallback (default = botai machines)
 
+  // Each bot gets its own game::Game session over the same lake (ponytail:
+  // own DATA1 stock load per bot) and its own deterministic streams: the
+  // session RNG seeded from comp seed + index and botai::MsvcRand likewise
+  // — same seed in, same comp out.
   void Init(const std::vector<std::string> &names,
-            const std::vector<ChatLine> &cl, int nBots, int countTicks,
-            uint32_t seed) {
+            const std::vector<ChatLine> &cl, int nBots, int countMs,
+            uint32_t seed, const ves::Grid *depth = nullptr,
+            const std::string &lakePath = std::string()) {
     chat = cl;
     rng.seed(seed);
     bots.clear();
@@ -254,21 +332,94 @@ struct Comp {
       b.x = (float)i / (nBots > 1 ? nBots - 1 : 1) * 2 - 1;
       // first wander stretch uses the AI_ei_syo wait formula too
       b.t = BotTicks(AIEiSyoMs((int)(rng() & 0x7fffffff), b.Skill10()));
-      bots.push_back(b);
+      b.ai.skill = b.Skill10();
+      b.ai.rng.s = seed * 2654435761u + (uint32_t)i * 40503u + 1;
+      b.g = std::make_unique<game::Game>();
+      b.g->Seed(seed + (uint32_t)i);
+      b.g->SetLake(depth, nullptr, nullptr, lakePath);
+      b.hooks = std::make_unique<GameHooks>();
+      b.hooks->g = b.g.get();
+      bots.push_back(std::move(b));
     }
-    countdown = countTicks;
+    countdown = countMs;
     log.clear();
   }
 
-  void Tick() {
-    if (countdown > 0) countdown--;
+  // One frame slice per bot (dtMs <= 1000, docs/sim-ai.md §6).
+  void Tick(uint32_t dtMs) {
+    if (countdown > 0) countdown = std::max(0, countdown - (int)dtMs);
     for (size_t i = 0; i < bots.size(); i++) {
-      int g = TickBot(bots[i], chat, rng);
-      if (g > 0) log.push_back(Catch{(int)i, g});
+      if (useToy) {
+        int g = TickBot(bots[i], chat, rng);
+        if (g > 0) log.push_back(Catch{(int)i, g});
+        continue;
+      }
+      TickOne(bots[i], (int)i, dtMs);
     }
   }
 
-  bool Done() const { return countdown == 0; }
+  bool Done() const { return countdown <= 0; }
+
+  // Deterministic wander target (00473070-style random probe): a
+  // walkable grid point >= 2000 units out (past the 1500 click minimum).
+  bool WanderTarget(Bot &b, double &wx, double &wy) {
+    game::Game &g = *b.g;
+    double mx = (g.GridW() - 1) * game::kCell, my = (g.GridH() - 1) * game::kCell;
+    for (int tries = 0; tries < 8; tries++) {
+      wx = (double)b.ai.rng.Below((int)mx + 1);
+      wy = (double)b.ai.rng.Below((int)my + 1);
+      double dx = wx - g.x, dy = wy - g.y;
+      if (dx * dx + dy * dy >= 2000.0 * 2000.0 && g.Walkable(wx, wy))
+        return true;
+    }
+    return false;
+  }
+
+  // One botai slice: the sim session advances first (its Ambient/strike
+  // paths make the bites), then the machine polls it through the hooks.
+  // The driver owns only the feet + event glue — walk completion posts
+  // kEvAct (arrival, 0047f740) into the shared action queue.
+  void TickOne(Bot &b, int idx, uint32_t dtMs) {
+    game::Game &g = *b.g;
+    b.hooks->roundLeftSec = countdown / 1000;
+    g.Update(input::Keys{}, dtMs / 1000.f);
+    int st0 = b.ai.state;  // pre-tick state for the entry edge
+    if (b.walkPending && !g.Walking()) {  // walk done -> arrival event
+      b.walkPending = false;
+      botai::Post(b.ai, botai::kEvAct);
+    }
+    if (b.ai.state == botai::kStWalking && !b.walkPending && !g.Walking() &&
+        b.ai.queue.empty() && !b.ai.hasPending) {
+      double wx = 0, wy = 0;
+      if (WanderTarget(b, wx, wy)) {
+        g.Click(wx, wy);
+        b.walkPending = g.Walking();
+      }
+      if (!b.walkPending) botai::Post(b.ai, botai::kEvAct);  // stuck stand-in
+    }
+    botai::Tick(b.ai, *b.hooks, (int)dtMs);
+    // FISHING entry arms the AI timer set (docs/sim-ai.md §4.3 re-arm tail
+    // formulas; botai.hpp has no entry block — test_botai arms the same way).
+    if (b.ai.state == botai::kStFishing && st0 != botai::kStFishing) {
+      botai::Arm(b.ai, botai::kTmrEiSyo,
+                 botai::AIEiSyoMs(b.ai.rng.Raw(), b.ai.skill));
+      botai::Arm(b.ai, botai::kTmrNoFishLong,
+                 botai::AINoFishLongMs(b.ai.rng.Below(10000), g.GridW() > 2));
+      botai::Arm(b.ai, botai::kTmrSyoko, botai::AISyokoMs());
+      botai::Arm(b.ai, botai::kTmrBore, botai::AIBoreMs(b.ai.rng.Raw()));
+    }
+    b.aiPrevState = b.ai.state;
+    if (b.bubbleTtl > 0 && (b.bubbleTtl -= (int)dtMs) <= 0) b.bubble.clear();
+    if (g.justCaught) {  // 00473320 landed: leaderboard gets the real weight
+      int grams = (int)(g.lastKg * 1000.0);
+      b.score += grams;
+      b.count++;
+      log.push_back(Catch{idx, grams});
+      const ChatLine *pick = PickLine(chat, b.name, rng);
+      b.bubble = pick ? b.name + ": " + pick->Text() : b.name + ": kala!";
+      b.bubbleTtl = 3000;
+    }
+  }
 
   void AddPlayerCatch(int grams) {
     playerScore += grams;

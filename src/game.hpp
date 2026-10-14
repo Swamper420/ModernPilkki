@@ -155,8 +155,8 @@ struct Game {
   // fish stock comes from the .ves DATA1 section + data0.dat species
   // tables; missing/corrupt files degrade to the documented synthetic
   // stand-in (bite::SyntheticStock) — never crash, never zero bites.
-  // ponytail: synthetic stand-in until main wires the paths (I2); the
-  // upgrade is passing real paths here and this branch just disappears.
+  // ponytail: empty speciesPath falls back to the extracted/ dev path;
+  // an install-layout constant lands when a loader exists (I2 passes it).
   void SetLake(const ves::Grid *d, const ves::Grid *t,
                const std::vector<ves::ObjGroup> *g = nullptr,
                const std::string &lakePath = std::string(),
@@ -421,6 +421,15 @@ struct Game {
     return true;
   }
 
+  // 004732d0 escape: the fish gets away, bite dies untallied. Public for
+  // the botai hooks (the fight's escape path calls ClearBite directly).
+  bool FishEscaped() {
+    if (!biteActive_) return false;
+    ClearBite();
+    ambientMs_ = -1;
+    return true;
+  }
+
   // Reel in (walk-away / dry lure): line up, stand pose.
   void Reel() {
     lineOut_ = false;
@@ -558,6 +567,8 @@ struct Game {
     return biteActive_ ? ring_.Find(ring_.rec[ring_.idx].seq) : nullptr;
   }
   int BiteCount() const { return (int)ring_.counter; }
+  // Load readback (I2 wiring): DATA1 fish loaded, 0 = synthetic stand-in.
+  size_t StockCount() const { return useSynth_ ? 0 : stock_.fish.size(); }
 
  private:
   ves::Grid depth_;
