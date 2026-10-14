@@ -30,6 +30,7 @@ ida_projects/
 *.bin.dump
 
 # Build outputs - Linux port
+rust/target/
 build/
 build-*/
 cmake-build-*/
