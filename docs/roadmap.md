@@ -19,6 +19,12 @@ input works — is reached (see Done), but that is a demo, not the destination.
 
 ## Done
 
+- Rust tree started (`rust/`, `88c1512`): Cargo workspace + SDL window
+  skeleton + bit-exact MSVC rand port (`00676d2c`/`0059db20`), parity test
+  asserts the `test_game.cpp:74` golden vectors (18 asserts). Env note:
+  system SDL2 is sdl2-compat 2.32 (SDL3-backed) and forwards unmapped event
+  `0x207`; rust-sdl2's safe event pump aborts on it — skeleton polls
+  `SDL_PollEvent` at sys level and ignores unknown types (as a C SDL2 app).
 - .ves sections + hash + objpos (`src/ves.hpp`)
 - .spr decode + viewer (`src/spr.hpp`)
 - .obj mesh + verts/faces/UV + viewer (`src/obj.hpp`, `src/objview.cpp`)
