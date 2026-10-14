@@ -1,6 +1,21 @@
-# Roadmap to playable
+# Roadmap to parity
 
-Goal: `pilkki` opens window, loads lake, renders scene, plays sound, input works.
+Destination: a game **identical to Propilkki 2 v2.0.7** on Linux, in Rust.
+Parity is the gate: it is what makes the Linux version trustworthy and makes
+later modifications safe (a mod diffs against a known-identical baseline).
+Until parity is proven for a system, any divergence from the original is a
+bug. **No placeholders**: no stand-ins, synthetic fallbacks, or invented
+constants in gameplay/render/audio paths — see "Parity gap" below for what
+still violates this. External crates are welcome where they replace weeks of
+unglamorous work (Vorbis/OSND decode, image decode, windowing/audio I/O) —
+never for game logic, which is hand-ported bit-exact (MSVC rand, float order,
+timers). All new code is Rust (`rust/` Cargo workspace, `cargo build` /
+`cargo test`); the `src/` C++ tree is the behavioral oracle until its systems
+are replaced 1:1, then it goes away. New mechanics only after parity, behind
+flags.
+
+The old goal — `pilkki` opens window, loads lake, renders scene, plays sound,
+input works — is reached (see Done), but that is a demo, not the destination.
 
 ## Done
 
@@ -94,6 +109,61 @@ value source + MENU_RESULTS_* row layout handlers, `00467c30`
 keyframe eval (presentation), event id 0x10 + RTTI names for unported
 state ids, `+0x33c` verdict source (net).
 
+## Parity gap: placeholders to purge
+
+Every item below is a shipped-path placeholder — a divergence from the
+original. Purge = decompile the real routine, port it 1:1, delete the
+stand-in. Nothing new may be added to this list.
+
+Sim/gameplay (`src/`):
+
+- `bite::SyntheticStock` + `game.hpp` synthetic fallback (`game.hpp:157/580/644`)
+  — dies with the sim open items above (`004b6990`, `005f8ff0`, `005f8490`,
+  `004bc340`)
+- `offline.hpp:240` bot quality curve `0059fbe0` identity stand-in;
+  `offline.hpp:398` stuck-action stand-in
+- `botai.hpp:147` round clock `DAT_007c695c` stand-in
+- `bite.hpp:353` `failP` uninitialised-value stand-in
+- `fishstock.hpp:295` depth fn `004a5700` stand-in
+- walk-grid bounds fallback mask 15 (`test_game.cpp:199`) — needs `004b6990`
+- `00487560(+0x340)` Nosto duration, results `0x2bc` value source +
+  MENU_RESULTS_* row layout, `00467c30` keyframe eval, event id 0x10 + RTTI
+  names, `+0x33c` verdict (net)
+
+Audio (`src/audio_play.hpp`, docs/audio.md):
+
+- drill = synth growl; KairausPlain.sfo is OSND and needs real Vorbis decode
+  (`audio_play.hpp:170`) — candidate external dep (lewton-class), massive win
+
+Render (`src/render3d_*`, `src/hud.hpp`, docs/render.md):
+
+- HUD layout is the port's design: `004bc9e0`/`004bd330` panel placement not
+  decompiled (`hud.hpp:10`)
+- sampler stand-in (original's 4 sampler objects) + terrain VS pair stand-in
+  (`render3d_pipeline.hpp:123/339/555`)
+- lake bed: `004a67b0`/`004a84a0` open; DEPTHMAP stand-in bed + grey palette
+  (`render3d_scene.hpp:37/142`)
+- object draw `0040afd0` stand-in (`render3d_objects.hpp:2`)
+- angler shadow alpha ceiling (`angler.hpp:146`)
+- fades ported but not wired (`ScreenRun`/`FadeUpdate` -> `ui::Game`/
+  `main.cpp`); PLAY input `0063ca80` + in-game UI draw `00638dd0` walked,
+  not ported
+- it12: dynamic entities `004a7030`, rod `0040b0b0`, menu variant `004a7b70`,
+  bed passes above
+
+## Rust migration (from 2026-10-14)
+
+All new code is Rust; no new C++. Per system:
+
+1. Decompile the routine(s) first (addresses cited in `docs/`).
+2. Port into `rust/` with a parity test: same inputs/seeds -> same outputs as
+   the original (verified against the decomp or fixtures from the C++ oracle).
+3. When a system's Rust tests cover the C++ implementation, delete the C++
+   side. `src/` keeps building (`cmake -S src -B build && cmake --build
+   build`) until fully replaced.
+
+`rust/` is a Cargo workspace: `cargo build && cargo test` from `rust/`.
+
 ## 3D render: decomp done (docs/render.md), SDL_GPU port is the remaining rock
 
 `docs/render.md` resolves the PLAY-screen scene: the lake is NOT screen
@@ -168,6 +238,9 @@ drawn pixels, both checker colours (per-frame dynamic VB rebuild verified).
   earlier (`6000` ticks; a bot's first catch needs >= ~720 ticks,
   `600` could never observe one).
 
-Rules: match behavior first, flags for new mechanics, build stays
-`cmake -S src -B build && cmake --build build`, tests per system,
-never commit binaries/extracted/Ghidra blobs.
+Rules: parity before features (destination: identical to Propilkki 2
+v2.0.7), flags for new mechanics, new code in Rust (`cargo build && cargo
+test` in `rust/`; C++ `cmake -S src -B build && cmake --build build` until
+deleted), tests per system, no placeholders in shipped paths (Parity gap
+above), external deps only where they save massive effort — never for game
+logic, never commit binaries/extracted/Ghidra blobs.
