@@ -39,6 +39,8 @@ are a stand-in for exactly this machinery.
 | `+0x240dc` | master `dlist` of all fish entries |
 | `+0x28a94 .. +0x28b30` | species table: ~39 pointer slots to 0x310-byte species objects |
 
+Decompile note (2026-10-14, `004a5700`): `+0x1efd8` is a **16-entry i32 table** indexed by the `+0x15168` grid byte's low nibble (0 when bit `0x10` set), not an i32 per-cell depth grid.
+
 ### 1.2 Load path (`FUN_004b6d70`, lake loader)
 
 Section reads in order (all `FUN_00430770(name)`): `INFOBLOCK(_V2)`,

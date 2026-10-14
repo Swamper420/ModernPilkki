@@ -434,7 +434,7 @@ int main() {
     double dist = std::sqrt(dx * dx + dy * dy);
     assert(dist >= 80.0 && dist <= 700.0);  // 90 standoff, arrival 600
   }
-  // 3: bilinear depth over 600-unit cells + walk bounds + frame bridge.
+  // 3: 004a5700 depth over 600-unit cells + walk bounds + frame bridge.
   {
     game::Game g;
     ves::Grid d = MkGrid(4, 2, 100);
@@ -454,6 +454,39 @@ int main() {
     assert(std::fabs(g.FromPortY(py) - 300.0) < 1e-3);
     assert(g.PortX(0) == -128.f && g.PortX(2400) == 128.f);
     assert(std::fabs(g.DepthCm(600, 0) - 1000.f) < 1e-6);  // cell 200 row
+  }
+  // 3b: 004a5700 decompile parity (docs/sim.md). Saddle cell (0,0) with
+  // V(x,y) row-major: V00=0, V10=100, V01=100, V11=0 (cell (2,2)=77).
+  // Expected values from the decompiled expression, ops in its exact order
+  // (values -> double, truncate at the end):
+  //   tx<ty : (V3-V2)*(1-ty) + ((V2-V1)*(1-tx) + V1)   V1=(x1,y1),V2=(x0,y1),V3=(x0,y0)
+  //   tx>=ty: (V3-V2)*ty      + ((V2-V1)*tx      + V1)   V1=(x0,y0),V2=(x1,y0),V3=(x1,y1)
+  {
+    game::Game g;
+    ves::Grid d = MkGrid(3, 3, 0);
+    d.cells[1] = 100;  // V(1,0)
+    d.cells[3] = 100;  // V(0,1)
+    d.cells[8] = 77;   // V(2,2)
+    g.Seed(1);
+    g.SetLake(&d, nullptr);
+    // (450,150): tx = 450/600 = 0.75 >= ty = 0.25 -> (V11-V10)*ty +
+    // ((V10-V00)*tx + V00) = (0-100)*0.25 + (100*0.75 + 0) = 50. Bil
+    // inear would give 62 (V00*0.5625+V10*0.1875+V01*0.1875+V11*0.0625).
+    assert(g.DepthAt(450, 150) == 50);
+    // flag 0: raw cell (0,0) value, no blend (004beb70 path).
+    assert(g.DepthAt(450, 150, false) == 0);
+    // (150,450): tx = 0.25 < ty = 0.75 -> V1=V(1,1)=0, V2=V(0,1)=100,
+    // V3=V(0,0)=0: (V3-V2)*(1-ty) + ((V2-V1)*(1-tx) + V1) =
+    // -100*0.25 + (100*0.75 + 0) = 50.
+    assert(g.DepthAt(150, 450) == 50);
+    // (100,200): tx = 1/6 < ty = 1/3 -> -100*(1-1/3) + (100*(1-1/6) + 0)
+    // = 16.667 -> truncated 16 (cvttsd2si).
+    assert(g.DepthAt(100, 200) == 16);
+    // Exact cell corner (flag 1 too): raw cell (2,2) value (idx clamp).
+    assert(g.DepthAt(1200, 1200) == 77);
+    // Not walkable past (w-1)*600: 0 (004af230 gate).
+    assert(g.DepthAt(1300, 1200) == 0);
+    assert(g.DepthAt(-600, 0) == 0);
   }
   // Real stock wiring: the .ves DATA1 populations when the file exists,
   // the documented stand-in when it does not — bites work either way and

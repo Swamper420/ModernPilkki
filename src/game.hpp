@@ -46,6 +46,7 @@ namespace game {
 // ---- constants (docs/sim.md section 7 cheat-sheet) ----
 inline constexpr double kPi = 3.14159265358979323846;
 inline constexpr double kCell = 600.0;      // world cell (grid divisor)
+inline constexpr double kInvCell = 1.0 / 600.0;  // 006d9f10 f64 (bits exact)
 inline constexpr double kWalkK = 0.34;      // 006d9f80 walk step per ms
 inline constexpr double kWalkKFast = 0.725; // 006d9fa0 run modes 0x1e/0x1f
 inline constexpr double kMinClickDist = 1500.0;  // 00799154 min click dist
@@ -242,27 +243,46 @@ struct Game {
     return ((double)py + 128.0) * (kCell * GridH() / 256.0);
   }
 
-  // 004a5700 bilinear depth at position (600-unit cells, raw cell scale).
-  float DepthAt(double wx, double wy) const {
-    if (!hasLake_) return 0;
+  // Clamped cell value (FUN_004a56a0 clamp + load; the nibble/table
+  // indirection there collapses to the DEPTHMAP cell value here).
+  int CellVal(int cx, int cy) const {
     int w = depth_.w, h = depth_.h;
-    double fx = wx / kCell, fy = wy / kCell;
-    fx = std::max(0.0, std::min(fx, (double)w - 1));
-    fy = std::max(0.0, std::min(fy, (double)h - 1));
-    int x0 = (int)fx, y0 = (int)fy;
-    int x1 = std::min(x0 + 1, w - 1), y1 = std::min(y0 + 1, h - 1);
-    double tx = fx - x0, ty = fy - y0;
-    double a = depth_.cells[(size_t)y0 * w + x0];
-    double b = depth_.cells[(size_t)y0 * w + x1];
-    double c = depth_.cells[(size_t)y1 * w + x0];
-    double d2 = depth_.cells[(size_t)y1 * w + x1];
-    return (float)((a * (1 - tx) + b * tx) * (1 - ty) +
-                   (c * (1 - tx) + d2 * tx) * ty);
+    cx = std::max(0, std::min(cx, w - 1));
+    cy = std::max(0, std::min(cy, h - 1));
+    return (int)depth_.cells[(size_t)cy * w + cx];
+  }
+
+  // 004a5700 depth at position (raw cell scale). Signature is (this, int x,
+  // int y, char flag): the 004af230 walkable gate first (0 when blocked),
+  // then flag 0 (and exact 600-unit cell corners) return the raw cell value
+  // via 004beb70; flag != 0 blends the four surrounding cells as two
+  // triangles split on tx == ty — NOT bilinear — in doubles, truncated to
+  // int (cvttsd2si). Neighbour cells clamp to the grid (004a56a0).
+  // Value source: the original reads lake+0x1efd8[walk-byte & 0xf] (16-entry
+  // table; the 004b6990 byte binding is open, docs/sim-walk.md) — the port
+  // uses the .ves DEPTHMAP cell values directly (docs/sim.md 004a5700).
+  int DepthAt(double wx, double wy, bool interp = true) const {
+    if (!hasLake_) return 0;
+    int x = (int)wx, y = (int)wy;      // the original takes int coords
+    if (!Walkable((double)x, (double)y)) return 0;
+    int x0 = x / 600, y0 = y / 600;    // idiv trunc toward zero
+    if (!interp || (x % 600 == 0 && y % 600 == 0))
+      return CellVal(x0, y0);          // 004beb70 path, raw i32 out
+    double tx = (double)(x % 600) * kInvCell;
+    double ty = (double)(y % 600) * kInvCell;
+    if (tx < ty) {  // upper-left triangle: (0,0),(0,1),(1,1) corners
+      double v1 = CellVal(x0 + 1, y0 + 1), v2 = CellVal(x0, y0 + 1),
+             v3 = CellVal(x0, y0);
+      return (int)((v3 - v2) * (1.0 - ty) + ((v2 - v1) * (1.0 - tx) + v1));
+    }
+    double v1 = CellVal(x0, y0), v2 = CellVal(x0 + 1, y0),
+           v3 = CellVal(x0 + 1, y0 + 1);
+    return (int)((v3 - v2) * ty + ((v2 - v1) * tx + v1));
   }
 
   // Display depth in cm via the .ves DEPTH_TABLE (presentation only).
   float DepthCm(double wx, double wy) const {
-    int c = (int)DepthAt(wx, wy);
+    int c = DepthAt(wx, wy);
     return (float)kDepthTable[std::min(16, c * 17 / 256)];
   }
 

@@ -10,6 +10,7 @@
 #include "ves.hpp"
 
 #include <dirent.h>
+#include <cassert>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -292,12 +293,8 @@ struct Stock : bite::Stock {
   std::vector<std::vector<int>> cells;  // gridW*gridH -> fish indices
   Species species[10];                  // data0.dat, idx 1..9 (0 unused)
   bool loaded = false;
-  std::function<int(int, int)> depth;   // 004a5700 stand-in
+  std::function<int(int, int)> depth;   // 004a5700(x,y,1); host wires it
   bite::Rng place;                      // placement RNG (deterministic)
-
-  Stock() {
-    depth = [](int, int) { return 100; };
-  }
 
   void SetSeed(uint32_t s) { place.Seed(s); }
   void SetDepth(std::function<int(int, int)> fn) {
@@ -400,7 +397,12 @@ struct Stock : bite::Stock {
   int SpeciesId(int idx) const override {
     return (idx >= 1 && idx <= 9) ? idx : 0;  // pick tables 004acc80
   }
-  int DepthAt(int x, int y) const override { return depth(x, y); }
+  // Host must SetDepth first (game.hpp BuildStock wires 004a5700); an unset
+  // fn is a wiring bug, not a depth to invent.
+  int DepthAt(int x, int y) const override {
+    assert(depth && "SetDepth must run before the stock is used");
+    return depth(x, y);
+  }
   bool Stocked() const override {
     for (const Entry &f : fish)
       if (f.type == 2) return true;  // 005f7980 == 2 -> lake+0x15128

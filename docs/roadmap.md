@@ -136,7 +136,7 @@ Sim/gameplay (`src/`):
   `offline.hpp:398` stuck-action stand-in
 - `botai.hpp:147` round clock `DAT_007c695c` stand-in
 - `bite.hpp:353` `failP` uninitialised-value stand-in
-- `fishstock.hpp:295` depth fn `004a5700` stand-in
+- `fishstock.hpp:295` depth fn `004a5700`: routine ported (`game.hpp` `DepthAt`), `return 100` stand-in deleted — but cell values come from the .ves DEPTHMAP, not `lake+0x1efd8[walk-byte & 0xf]` (16-entry table, `004b6990` byte binding open), and `fishstock::Place()` still skips the original's `004a5700(x,y,0) > 30` resample gate
 - walk-grid bounds fallback mask 15 (`test_game.cpp:199`) — needs `004b6990`
 - `00487560(+0x340)` Nosto duration, results `0x2bc` value source +
   MENU_RESULTS_* row layout, `00467c30` keyframe eval, event id 0x10 + RTTI

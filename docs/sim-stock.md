@@ -181,6 +181,7 @@ Verified placement consequences: fish are spread by their record's spawn
 area (haapolahti's first fish: box x 41242..54310, y 8621..20361), and
 the cell assignment is the strict 600-unit grid lookup (`004a9490`,
 `docs/sim-bite.md` §2).
+Decompile note (2026-10-14): `004a5700(x,y,0)` verified — flag 0 returns the raw cell value at the clamped cell, the routine itself already returns 0 when `004af230` fails, and the `SetDepth` "stand-in" is now the ported lookup (`game::Game::DepthAt`).
 
 ## 6. Migration `004bc340` (verified behaviour, mechanics simplified)
 
