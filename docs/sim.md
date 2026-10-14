@@ -556,3 +556,102 @@ countdown, intro/outro sequences, model animation).
 | 20000..94999 | `0047f740` | Ambient timer duration (`rand(75000)+20000`) |
 | 214013 / 2531011 | `00676d2c` | MSVC rand constants |
 | 0x0E5FAF5F | `00590c10/00590e70` | weight-field XOR key |
+
+---
+
+## 8. Errata (2026-10-14) — claims in this document superseded by the
+## per-system passes. Authority: docs/sim-{ai,timeline,bite,controller,walk,stock}.md.
+
+This document was the first-pass analysis. The follow-up passes (each
+with its own decomp walk + port) disproved or refined the items below.
+Where both disagree, the per-system doc wins.
+
+### §1/§2 object model
+- `00630790` is a **state-transition request** (writes `+0x44`, `+0x30 = 3`,
+  logs `Go to state:`), not a queue push. Push = `006303c0`/`0062ffe0`/
+  `00630040` (0x14-byte record = id + 4 payload dwords), pop = `00630740`.
+  (docs/sim-ai.md §1)
+- `session+0x3c0` is the **next-state latch** (epilogue `prev <- state;
+  state <- pending`), not a "substate"; state entry is `prev != state`,
+  init `-1 -> 1`. (docs/sim-controller.md §1)
+
+### §3 input
+- **There is no VK→command map.** `00495930` returns `menuObj+0x28`, a
+  **UI list selection index** (mouse-picked, getters `00595220/80/b0`).
+  Keys enter raw through the queue `7bcd60`; `004876d0` maps VK `0x20` =
+  **Space** -> action 3 (this doc's "ESC (`0x20`)" is wrong — Esc is
+  handled one level up in the 00640370 state-20 block). Command→bit
+  table 0..10: docs/sim-walk.md §3. (docs/sim-walk.md)
+- Click orders: `0047f530` rejects only `x<0||y<0`; **out-of-bounds
+  clicks are accepted** and the walk stops at the wall (world extents
+  `(w−1)*600` from `lake+0x15160/64`). `004b0bb0` = obstacle triangles +
+  300-unit hole exclusion only. (docs/sim-walk.md §1)
+
+### §3.3/§4.2 controller
+- Controller state `0xd` is the **fish fight** (kala_force timer,
+  forceRise 3000 ms hold, abort re-inits at power·0.75), not "drilling".
+  The drill run is its own path: `stepMs = (rand(4)+13)*200` (not
+  `rand(13)`), `power = max(depth, 70)`, `ticks = ((w*0.5+0.8)*power +
+  w*70)*0.04`, depth ladder `004acc40/004acbf0/004abf20`, both stop
+  rolls run (second overwrites), type-3 & weight>1000 & `rand(3)<2` =
+  forced full run. (docs/sim-controller.md §2/§3)
+- Walk pause duration is `(players<8 ? (23−players)*25 : 400)` ms,
+  doubled in controller state 8. (docs/sim-controller.md §4)
+- `00479700`'s thresholds (125/250/500/always) key off the **record
+  weight grams** (`00590c10(rec)`) — "activity" was a mislabel; ambient
+  attempt (`rec == 0`) is `rand(1000) <= 500`. `00651220(0)` reads the
+  timer **fired** flag and bootstraps fight timers. "Nosto" duration =
+  `00487560(+0x340)`, not 1000 ms. (docs/sim-controller.md §5)
+
+### §4.3/§4.4 bite + fish stock
+- Fish populations are built **at lake load** from the `.ves` DATA1
+  section (deobfuscation `00430f50`: byte-reverse + XOR key
+  `fkjsafdBLKJBbljbefwlkj`, `006dbfa8`; DATA2 key
+  `hjdfHGFAJKGghafkjhg`), `0xfc0`-byte entries (`005f58b0`) placed per
+  cell by `004a9490`; species = 0x310 ids at `lake+0x28a94` from
+  `data/nyky/data0.dat` (9 species); names pool `0070af30` (1 Ahven ..
+  26 Made). Migration `004bc340`. (docs/sim-stock.md, docs/sim-bite.md)
+- The candidate search is a **static 3×3 walk around the seed cell**;
+  this doc's "seed = cy" advance rule is wrong (seed reloaded per
+  iteration, `004ba71e`). (docs/sim-bite.md §2)
+- Bite record `0x70`: weight v at **rec+0x0c** (XOR `0x0E5FAF5F`);
+  outcome byte from the 33-row `00746278` **type** ramp + two
+  `rand(101)` rolls (thr 95/60/30/0/10); depth bands selected by v
+  against the line-rule u32 (300/700/1200/1500 bonus); timing ramp
+  boundary `v >= 1001`; `00590ce0` ring params. (docs/sim-bite.md §3)
+- Species band tables: the second halves in §4.4.5 are wrong (real
+  values dumped in docs/sim-bite.md §4); selection is
+  `004acc80(type, v)`. (docs/sim-bite.md §4)
+- Rate limiter = exact sliding gap-sum window (`00592160`), avg ≥ 900.
+
+### §4.6 round structure
+- The `9 → 10 → 0xc → 0xe → 0x10 → {0x12|0x31|0x33}` chain is the
+  **drill animation chain** (KAIRAAMINEN1..5 → LAPI_MENI /
+  POHJAAN_MENI), not a pre-round countdown; stages 1000 ms, hop hold
+  `0047a1c0: (v<=100 ? v*1000 : 100000)+200`. Mode names verified:
+  0x18 = JUST_SITTING (fishing), 0x1e/0x1f = JUOKSU (run), 0x25/0x26 =
+  NOSTO (lift), 0x27/0x28 = KORJAILU (mending), 5 = PAIKALLAAN.
+  (docs/sim-timeline.md §2)
+- Round end hold is **2300 ms** (`0x8fc` ramping `7c895c` to 2000),
+  not 2000; sequence: end-mode rising edge (`00476180|00476160`) →
+  end timer `00650fe0` → `00483890(2,0)` freeze → `00632880()` → state
+  0x15. Round time limit = `min(minutes,60)*60000` ms.
+  (docs/sim-timeline.md §5)
+- Move script: heap block built by `AddMove 00463b50` (max 70 moves);
+  names at `script+0x522b0+move*30` (not `+0x29158`). Source = the
+  `<STARTMOVES>` block of `gfx/3ds/human2.3ds` (parsed by
+  `model3ds.hpp`). (docs/sim-timeline.md §1/§3)
+
+### §4.5 results
+- `004c2ce0` is the **string-table init** (6288 entries), not per-round
+  logic. Verified rows by id: 0x96 total catch weight, 0x24c biggest
+  fish, 0xa7 `No bites.`, 0xad bite-flag, 0x2bc `Initial drill`.
+  (docs/sim-results.md)
+
+### §5 AI
+- Event pump `004710e0` (timer→event map: no_fish_long→7, ei_syo→6,
+  bore→5, korjaus/nosto/sinking→4; syoko 1 s bite roll; strike decision
+  = `skill+1` quality draws vs `rand%100`) and the four AI_STATE_*
+  machines are ported in `src/botai.hpp`. The "too many players close"
+  guard is `00472cf0` travel-cost-vs-round-clock (`004383c0`), not a
+  distance test. (docs/sim-ai.md)
