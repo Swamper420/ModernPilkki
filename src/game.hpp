@@ -1,35 +1,43 @@
 // Offline single-player ice-fishing sim. One system, one authority:
-// docs/sim.md section 6 deltas applied 1:1 against ProPilkki2 (clean-room).
+// game.hpp drives the player; the verified modules own the formulas.
 //
-//  - sim runs in ORIGINAL world units (600-unit DEPTHMAP cells); the
-//    render/camera layer keeps the port's +-128 8.24 frame, bridged by
-//    PortX/PortY/FromPortX/FromPortY (delta 2/3).
-//  - movement is click-to-move: target >= 1500 units, hole snap at 300,
-//    arrival 600, stand-off 90 behind the hole; walk step
-//    dir(heading deg) * K * ms, K = 0.34 (0.725 in at-hole states).
-//  - drill is a mode machine: 5 -> 6 -> 0x13 (hole object) -> 0x18 ->
-//    0x27 -> 0x25 line stage -> 0x1e/0x1f at-hole pose (delta 4/5).
-//  - line depth is a discrete bucket {10,20,30,40} m (delta 6).
-//  - bites: "Ambient" timer rand(75000)+20000 ms with a 50% roll, or an
-//    action attempt (thresholds 125/250/500/always) through the 900 ms
-//    avg-gap server limiter; candidates come from a 9-cell walk over
-//    per-cell fish populations (delta 7/12/13).
-//  - catch is probabilistic (rand(10000) vs depth-band p 0.7/0.9/0.95),
-//    weight is W = min(v*k_line, cap_line), species from band tables
-//    (delta 8/9/10).
-//  - RNG is MSVC rand exactly (delta 11), asserted for seed 0x1234.
-//  - newMechanics gates ONLY port extras (wandering fish dots); the old
-//    jig speedup + depth-scaled weight were deleted with deltas 8/9.
-//    Base behaviour is always original (delta 19).
+//  - world/walk/click unchanged (docs/sim-walk.md): 600-unit DEPTHMAP
+//    cells, click-to-move 0.34 units/ms (0.725 in run modes), hole snap
+//    at 300 with a 90-unit stand-off; PortX/PortY bridge the +-128 frame.
+//  - move/mode machine + drill chain: timeline.hpp (docs/sim-timeline.md).
+//    Drill start (004764b0) -> 6 -> stance -> chain 9->10->0xc->0xe->0x10
+//    (1000 ms stages, hold 0047a1c0) -> outcome 0x12 -> 0x13 hole creation
+//    (00480820) -> 0x18 sitting/fishing. A hole drill takes ~12 s like the
+//    original. Round end: mode-set rising edge + kEndHoldMs = 2300
+//    (00650fe0 end timer; the old 2000 was the ramp target).
+//  - bites: bite.hpp (docs/sim-bite.md): bite::BuildRecord over
+//    fishstock::Stock populations (docs/sim-stock.md), 64-slot ring
+//    (00471940), bite::RateWindow request limiter (avg gap >= 900 ms).
+//    Attempts roll ctrl::BiteRoll (00479700): rec == 0 -> rand(1000) <=
+//    500 (Ambient path), else thresholds 125/250/500/always on the record
+//    weight grams (the old "activity" label was wrong).
+//  - fight: controller.hpp (docs/sim-controller.md): the 0xd drill run
+//    (ctrl::Session: InitDrill/DrillStepAdvance/DrillEnd) resolves the
+//    hooked fish; forceRise = 3000 ms strike hold aborts into the forced
+//    power*0.75 run. Line depth words +0x414/+0x418/+0x41c/+0x420 and the
+//    004ac620 bucket ladder drive the run depths.
+//  - RNG: one stream, bite::Rng (= game::MsvcRand); ctrl::'s LCG copy is
+//    state-synced at the boundary (same generator).
+//  - newMechanics gates ONLY port extras (wandering fish dots).
 // Frame slicing (delta 1) is tick::Slices in main.cpp. ForceBite is a
-// non-original test hook (delta 19). SetLake(null) = empty safe.
+// non-original test hook. SetLake(null) = empty safe.
 #pragma once
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <vector>
 
+#include "bite.hpp"
+#include "controller.hpp"
+#include "fishstock.hpp"
 #include "input.hpp"
+#include "timeline.hpp"
 #include "ves.hpp"
 #include "walkgrid.hpp"
 
@@ -39,7 +47,7 @@ namespace game {
 inline constexpr double kPi = 3.14159265358979323846;
 inline constexpr double kCell = 600.0;      // world cell (grid divisor)
 inline constexpr double kWalkK = 0.34;      // 006d9f80 walk step per ms
-inline constexpr double kWalkKFast = 0.725; // 006d9fa0 at-hole states
+inline constexpr double kWalkKFast = 0.725; // 006d9fa0 run modes 0x1e/0x1f
 inline constexpr double kMinClickDist = 1500.0;  // 00799154 min click dist
 inline constexpr double kArrive = 600.0;         // 006da068 arrival radius
 inline constexpr double kGuidance = 180.0;       // 006da060 guidance radius
@@ -52,57 +60,42 @@ inline constexpr double kAtHoleDist = kArrive + kStandOff;
 inline constexpr double kArriveSq = kArrive * kArrive;         // 360000
 inline constexpr double kGuidanceSq = kGuidance * kGuidance;   // 32400
 inline constexpr double kHoleSnapSq = kHoleSnap * kHoleSnap;   // 90000
-inline constexpr int kLineM[4] = {10, 20, 30, 40};   // discrete line depth
-inline constexpr double kWeightDiv[4] = {60.0, 115.0, 160.0, 230.0};
-inline constexpr double kWeightCap[4] = {300.0, 30.0, 30.0, 30.0};
+inline constexpr int kLineM[4] = {10, 20, 30, 40};   // line metres (lure class)
 inline constexpr double kDeepestTable = 2500;  // .ves DEPTH_TABLE max cm
-// Drill/bore durations: move-script table (+0x118/+0x52aec) unported,
-// values tuned to the original's few-second drill (delta 20 open).
-inline constexpr double kDrillMs = 2000.0, kBoreMs = 1000.0;
-inline constexpr uint32_t kMinGapMs = 900;  // 006d6b80 bite request limiter
-// Timing-engine periods (delta 18; the full 00650fe0 named-timer engine
-// is not ported, only the periods the sim actually consumes).
-inline constexpr uint32_t kForceRiseMs = 3000;  // "forceRise" timer
-inline constexpr uint32_t kNostoMs = 1000;      // "Nosto" reel timer
-inline constexpr uint32_t kEndHoldMs = 2000;    // round-end hold -> Results
+inline constexpr uint32_t kForceRiseMs = 3000; // "forceRise" hold (0x400->0x800)
+// Round-end hold -> Results (00650fe0 end timer 0x8fc; 2000 is the fade
+// ramp target, docs/sim-timeline.md section 5).
+inline constexpr int kEndHoldMs = timeline::kEndTimerMs;  // 2300
+// "Nosto" fish-lift timer: 00650fe0("Nosto", 0, 1000, 00487560(+0x340), 0,
+// 8) — the duration is the 00487560(+0x340) formula, not 1000 ms.
+// ponytail: 00487560 unported (+0x340 semantics open); the lift runs on
+// the NOSTO move durations (0x25/0x26, 500 ms) until that lands.
 
-// .ves DEPTH_TABLE display thresholds (delta 10: display table only, NOT
-// the runtime species selector - those are the band tables below).
+// .ves DEPTH_TABLE display thresholds (presentation only, NOT the species
+// selector — those are bite::SpeciesTable, indexed by weight).
 inline constexpr int kDepthTable[17] = {0,   30,  60,  130, 160, 200,
                                         250, 300, 350, 400, 500, 700,
                                         900, 1000, 1500, 2000, 2500};
 
-// Game modes referenced by the sim (move timeline ids).
+// Move/mode ids (human2.3ds STARTMOVES; docs/sim-timeline.md section 2).
 enum Mode : int {
-  kModeFree0 = 0,        // free-walk pose (0 <-> 1)
-  kModeFree1 = 1,        // free-walk pose; also no-lure fallback
-  kModeAction = 5,       // drill/start allowed (004764b0 guard)
-  kModeDrill = 6,        // drilling (msg 0xd)
-  kModeHole = 0x13,      // hole creation pass (00480820)
-  kModeAtHoleA = 0x1e,   // at-hole pose A (K = 0.725)
-  kModeAtHoleB = 0x1f,   // at-hole pose B
-  kModeBore = 0x18,      // bore/drilling (00477310)
-  kModeLineStage = 0x25, // line/lure stage (00477880)
-  kModeBoreEnd = 0x27,   // bore end (00477220)
+  kModeWalk1 = 0,   // KAVELY1 walk cycle
+  kModeWalk2 = 1,   // KAVELY2 walk cycle; no-lure fallback
+  kModeAction = 5,  // PAIKALLAAN standing — drill start allowed (004764b0)
+  kModeDrill = 6,   // KAIRAUSASENTOON1 drill stance (004764b0 -> 6)
+  kModeHole = 0x13, // KAANNY_JATTAAKSEEN hole creation pass (00480820)
+  kModeSit = 0x18,  // JUST_SITTING sitting/fishing at hole (00477310 -> 0x18)
+  kModeRunA = 0x1e, // JUOKSU1 run (fast step K = 0.725)
+  kModeRunB = 0x1f, // JUOKSU2 run
+  kModeLift = 0x25, // NOSTO1 fish lift (00477880 -> 0x25)
+  kModeMend = 0x27, // KORJAILU_ASENTOON mending stance (00477220 -> 0x27)
 };
 
-// Strike resolution outcomes (00473280/004732d0/00473320 paths).
-enum StrikeResult { kResNormal = 0, kResEscape = 1, kResLand = 2 };
-
-// MSVC rand, bit-exact (00676d2c / 0059db20).
-struct MsvcRand {
-  uint32_t s = 0;
-  void Seed(uint32_t v) { s = v; }
-  uint32_t Rand() { s = s * 214013u + 2531011u; return (s >> 16) & 0x7fffu; }
-  int RandMax(int n) {  // (int)(u30 * 2^-30 * n), clamp n-1; n<=0 -> 0
-    if (n <= 0) return 0;
-    uint32_t r1 = Rand() & 0x7fff, r2 = Rand() & 0x7fff;
-    uint32_t u = (r2 << 15) | r1;  // 30-bit
-    double v = (double)u * 9.313225746154785e-10 * (double)n;
-    int r = (int)v;
-    return r > n - 1 ? n - 1 : r;
-  }
-};
+// MSVC rand, bit-exact (00676d2c / 0059db20). ONE implementation shared
+// with the modules: game::MsvcRand IS bite::Rng. ctrl:: keeps its own
+// copy of the same LCG (ctrl::MsvcRand) — synced at the call boundary,
+// see CtrlRng/SyncRng below.
+using MsvcRand = bite::Rng;
 
 // Presentation only (delta 12: original has no wandering fish list; the
 // port's dots exist solely behind newMechanics).
@@ -122,41 +115,11 @@ struct Hole {
   int landCount = 0;
 };
 
-// Bite record (64-slot ring at session+0x738, 0x70 each).
-struct Bite {
-  uint32_t seq = 0;
-  int species = 0;      // index into lake+0x28a94 (id table unported)
-  int v = 0;            // weight grams (00590c10 tamper field)
-  int lineBucket = 0;
-  double catchP = 0, failP = 0;  // depth-band probabilities
-  double timing32 = 0;           // record +32 second timing value
-};
-
-// 004538a0 bite-request limiter: rolling window of request gaps, avg must
-// be >= 900 ms else the request is rejected ("Bite too often!").
-// ponytail: window length 16 unverified (00592160 ring size open).
-struct RateGate {
-  static constexpr int kN = 16;
-  uint32_t gaps[kN] = {};
-  int n = 0, at = 0;
-  uint32_t last = 0;
-  bool seen = false, warn = false;
-  bool Allow(uint32_t now) {
-    uint32_t gap = seen ? now - last : now;
-    last = now;
-    seen = true;
-    gaps[at] = gap;
-    at = (at + 1) % kN;
-    if (n < kN) n++;
-    double sum = 0;
-    for (int i = 0; i < n; i++) sum += gaps[i];
-    bool ok = (sum / n) >= (double)kMinGapMs;
-    warn = !ok && gap > 1000;  // "Bite too often!" log condition
-    return ok;
-  }
-};
-
 struct Game {
+  Game() : mach_(timeline::HumanScript()) {}
+  Game(const Game &) = delete;  // stock depth callback captures this
+  Game &operator=(const Game &) = delete;
+
   // ---- public sim state ----
   double x = 0, y = 0;   // world pos, original units (004770a0 doubles)
   int ix = 0, iy = 0;    // +0x4c8/+0x4cc integer pos
@@ -168,7 +131,6 @@ struct Game {
   double totalKg = 0, lastKg = 0, biggest = 0;  // +0x354/358/35c tallies
   bool newMechanics = false;  // gates port extras only (delta 19)
   bool justDrilled = false, justCaught = false, justBite = false;
-  int activity = 0;       // obfuscated +0xc session field (setter open)
   bool rateWarn = false;  // "Bite too often!" fired this slice
   // 4 bait types x 16 lures grid (0058e5d0 set / 0058f760 clear /
   // 0058f7c0 consume on catch, delta 14).
@@ -176,27 +138,42 @@ struct Game {
   // reachable but non-trivial.
   static constexpr int kBaitTypes = 4, kLureSlots = 16, kBaitPerSlot = 10;
   int bait[kBaitTypes][kLureSlots] = {};
+  // Drill skill 0042bd00() for the chain hold (0047a1c0); 0 = the plain
+  // 1000 ms stages. Chain outcome bytes +0x4e8 (bottom) / +0x6c0 (alt).
+  int drillSkill = 0;
+  bool drillBottom = false, drillAlt = false;
 
   // ---- lifecycle ----
   void Seed(uint32_t s) {
+    seed_ = s;
     rng_.Seed(s);
     ClearTimers();
   }
 
   // Null grids = no lake: movement works, drill/fish guarded off
-  // (original drill guard needs a lake, +0x528).
+  // (original drill guard needs a lake, +0x528). With a lakePath the
+  // fish stock comes from the .ves DATA1 section + data0.dat species
+  // tables; missing/corrupt files degrade to the documented synthetic
+  // stand-in (bite::SyntheticStock) — never crash, never zero bites.
+  // ponytail: synthetic stand-in until main wires the paths (I2); the
+  // upgrade is passing real paths here and this branch just disappears.
   void SetLake(const ves::Grid *d, const ves::Grid *t,
-               const std::vector<ves::ObjGroup> *g = nullptr) {
+               const std::vector<ves::ObjGroup> *g = nullptr,
+               const std::string &lakePath = std::string(),
+               const std::string &speciesPath = std::string()) {
     (void)t;  // typemap drives terrain tint only, not sim (delta 3)
     (void)g;  // object positions are scene decoration, not fish (delta 12)
     hasLake_ = d && !d->cells.empty() && d->w > 0 && d->h > 0;
-    if (hasLake_) depth_ = *d;
+    if (hasLake_)
+      depth_ = *d;
+    else
+      depth_ = ves::Grid{};
+    BuildStock(lakePath, speciesPath);
     holes.clear();
     fishes.clear();
     catches = 0;
     totalKg = lastKg = biggest = 0;
     ClearTimers();
-    mode_ = kModeAction;
     lineBucket_ = 0;
     lineDepth = kLineM[0];
     x = GridW() * kCell * 0.5;  // start at grid centre (old frame centre)
@@ -209,15 +186,28 @@ struct Game {
       for (int i = 0; i < 10; i++) fishes.push_back(PresentationFish());
   }
 
+  // Corner-byte walk grid (004af230). The builder (004b6990, from
+  // data/type.dat + depth.dat) is unported, so hosts pass a grid once a
+  // source exists; without one Walkable keeps the bounds behaviour.
+  void SetWalkGrid(const walkgrid::GridView &gv) { walk_ = gv; }
+
   // ---- queries ----
   bool Biting() const { return biteActive_; }
   bool LineOut() const { return lineOut_; }
-  int Mode() const { return mode_; }
+  int Mode() const { return mach_.Mode(); }
   bool Walking() const { return walking_; }
   bool Arrived() const { return arrived_; }
   double GridW() const { return hasLake_ ? (double)depth_.w : 2.0; }
   double GridH() const { return hasLake_ ? (double)depth_.h : 2.0; }
   bool ActiveLure() const { return bait[activeType_][activeLure_] > 0; }
+
+  // Round-end mode sets (00476180 || 00476160) + rising edge (the end
+  // timer is created on the edge; docs/sim-timeline.md section 5).
+  bool RoundEndMode() const {
+    int m = Mode();
+    return timeline::IsRoundEndMode(m) || timeline::IsLiftMode(m);
+  }
+  bool EndModeEdge() const { return endModeEdge_; }
 
   bool AtHole(float r = (float)kAtHoleDist) const {
     double r2 = (double)r * r;
@@ -276,96 +266,21 @@ struct Game {
     return (float)kDepthTable[std::min(16, c * 17 / 256)];
   }
 
-  // 004af230 walkability. The world ends at (w-1)*600 x (h-1)*600: those
-  // extents are what the original's grid builder records at lake
-  // +0x15160/+0x15164 (004b8b20). The per-corner mask rule (bit 0x10 =
-  // passable corner) is ported in walkgrid.hpp; until the corner bytes
-  // are loaded from the lake this bounds check is the all-passable
-  // stand-in (mask 15 inside the grid), which is what makes Step stop at
-  // the wall.
+  // 004af230 walkability. With a loaded corner grid the 16-case mask rule
+  // decides (walkgrid.hpp); the world ends at (w-1)*600 x (h-1)*600
+  // (004b8b20 extents) in the bounds fallback, which is what makes Step
+  // stop at the wall.
   bool Walkable(double wx, double wy) const {
+    if (walk_.data && walk_.w > 0 && walk_.h > 0)
+      return walkgrid::Walkable(walk_, wx, wy);
     double mx = (GridW() - 1) * kCell, my = (GridH() - 1) * kCell;
     return wx >= 0 && wy >= 0 && wx <= mx && wy <= my;
   }
 
-  // ---- pure formulas (docs/sim.md section 4) ----
-
-  // 004538a0 catch/fail probability bands by depth.
-  static void CatchBand(double depth, double &catchP, double &failP) {
-    if (depth < 150) {
-      catchP = 0.7;
-      failP = 0.1;
-    } else if (depth < 300) {
-      catchP = 0.9;
-      failP = 0.4;
-    } else {
-      catchP = 0.95;
-      failP = 0.5;
-    }
-  }
-
-  // 00478210 strike resolution: rand(10000) vs stored probabilities.
-  // escape 004732d0, land 00473320, normal = fish stays hooked.
-  static int ResolveStrike(int roll, double catchP, double failP) {
-    if (roll < failP * 10000) return kResEscape;
-    if (roll < catchP * 10000) return kResLand;
-    return kResNormal;
-  }
-
-  // 00479700 attempt-B threshold by activity; -1 = always.
-  static int BiteThreshold(int act) {
-    if (act < 500) return 125;
-    if (act < 1000) return 250;
-    if (act < 1700) return 500;
-    return -1;
-  }
-
-  // Weight: W = min(v * k_line, cap_line) where v = tamper-decoded grams
-  // (delta 9). ponytail: output unit follows the original formula; the
-  // results builder 004c2ce0 that consumes it is unported (open).
-  static double WeightG(int v, int bucket) {
-    if (bucket < 0) bucket = 0;
-    if (bucket > 3) bucket = 3;
-    return std::min((double)v / kWeightDiv[bucket], kWeightCap[bucket]);
-  }
-
-  // Bite record +32 second timing value.
-  static double Timing32(int v) {
-    if (v >= 1000) return 0.16666;
-    if (v > 300) return 0.05 + (v - 300) * 0.0001666571;
-    return 0.05;
-  }
-
-  // Section 4.4.5 species pick tables (indices into lake+0x28a94 + idx*4;
-  // the id table itself is unported). Fallback fish are type 2.
-  static const int *SpeciesTableFor(int type, double depth) {
-    static const int t30[8] = {1, 1, 1, 2, 9, 1, 1, 2};    // v < 30
-    static const int t200[8] = {1, 1, 2, 2, 0, 1, 1, 3};   // v < 200
-    static const int tbig[8] = {6, 7, 7, 7, 2, 2, 3, 8};   // else
-    static const int t3[8] = {6, 6, 6, 6, 6, 7, 7, 7};     // type 3 (5 same)
-    static const int t15[8] = {3, 4, 5, 5, 3, 9, 5, 5};    // type 0xf
-    static const int t16[8] = {3, 9, 5, 5, 1, 4, 5, 6};    // type 0x16
-    if (type == 3 || type == 5) return t3;
-    if (type == 0xf) return t15;
-    if (type == 0x16) return t16;
-    if (depth < 30) return t30;
-    if (depth < 200) return t200;
-    return tbig;
-  }
-
-  // Verified pre-round countdown chain (delta 15): each hop when elapsed
-  // >= session+0x46c; the durations live in the unported move-script
-  // table, so the port enters play directly at mode 5 (open, delta 20).
-  // 9 -> 10 -> 0xc -> 0xe -> 0x10 -> {0x12 | 0x31 | 0x33}.
-  static int CountdownNext(int mode) {
-    switch (mode) {
-      case 9: return 10;
-      case 10: return 0xc;
-      case 0xc: return 0xe;
-      case 0xe: return 0x10;
-      case 0x10: return 0x12;  // 0x31/0x33 alternates unported (open)
-      default: return -1;
-    }
+  // 004875f0 walk/stand-up anim timer (states 4/8). The sim's walk is the
+  // continuous 0.34/ms step; this is the timer formula for hooks/tests.
+  static int WalkMs(int players, bool doubled) {
+    return ctrl::WalkMs(players, doubled);
   }
 
   // ---- input actions ----
@@ -384,7 +299,7 @@ struct Game {
   // the walk grid then stops the walker mid-walk (Step keeps the last
   // legal step). Clicks closer than 1500 units (00799154) are ignored
   // unless already arrived (+0x698); a click near an open hole snaps to
-  // the 90-unit stand-off point (00476c00) and toggles the at-hole pose
+  // the 90-unit stand-off point (00476c00) and toggles the run pose
   // (0x1e <-> 0x1f).
   void Click(double wx, double wy) {
     Hole *h = NearestOpenHole(wx, wy, kHoleSnap);  // 004aeee0 (90000 sq)
@@ -401,10 +316,10 @@ struct Game {
     if (o.kind == walkgrid::kReject) return;
     if (o.kind == walkgrid::kHoleSnap) {
       atHoleTarget_ = true;  // +0x4bc
-      if (mode_ == kModeAtHoleA)
-        mode_ = kModeAtHoleB;  // 00476c00 pose toggle 0x1e <-> 0x1f
-      else if (mode_ == kModeAtHoleB)
-        mode_ = kModeAtHoleA;
+      if (mach_.Mode() == kModeRunA)
+        JumpMode(kModeRunB);  // 00476c00 pose toggle 0x1e <-> 0x1f
+      else if (mach_.Mode() == kModeRunB)
+        JumpMode(kModeRunA);
       walkX_ = o.tx;
       walkY_ = o.ty;
       walking_ = true;
@@ -418,37 +333,160 @@ struct Game {
     arrived_ = false;
   }
 
-  // 004764b0 drill start: mode 5, lake present, no open hole within 300
-  // of the drill point pos + dir*75. Mode -> 6 (delta 4).
+  // 004764b0 drill start + chain reset (00480820's driver): guards are
+  // mode 5, lake present, +0x4bc == 0, no hole within 300 of the drill
+  // point pos + dir*75. On success mode -> 6 and the drilling chain
+  // stamps +0x450/+0x470 with +0x4e4 = 2 (plain drill start).
   void DrillStart() {
-    if (mode_ != kModeAction || !hasLake_ || atHoleTarget_) return;
+    if (!hasLake_ || atHoleTarget_ || mach_.Mode() != kModeAction) return;
     double dpx = x + dirX_ * kDrillLook, dpy = y + dirY_ * kDrillLook;
     if (NearestOpenHole(dpx, dpy, kHoleSnap)) return;  // hole already here
+    modeChain_.mode = kModeAction;
+    modeChain_.holeOpen = lineOut_;  // +0x4bc: line is down a hole
+    if (modeChain_.DrillStart(true) != 1 ||
+        modeChain_.mode != ctrl::MDrillStart)
+      return;
     drillX_ = dpx;
     drillY_ = dpy;
-    drillMsLeft_ = kDrillMs;
+    holePending_ = true;
+    chain_ = timeline::Chain{};
+    chainIn_ = timeline::ChainInput{2, drillBottom, drillAlt};
+    JumpMode(ctrl::MDrillStart);
     walking_ = false;
-    mode_ = kModeDrill;
   }
 
-  // Strike / jig action (Space): resolves an active bite record, else an
-  // action bite attempt through the 900 ms limiter (delta 7/8).
+  // Strike / jig action (Space): a hooked fish enters the 0xd fight
+  // (ctrl::Session drill run); otherwise an action bite attempt through
+  // the 900 ms request limiter (004538a0).
   void Strike() {
+    if (fightActive_) return;
     if (biteActive_) {
-      const Bite &b = ring_[activeSlot_];
-      int r = ResolveStrike(rng_.RandMax(10000), b.catchP, b.failP);
-      if (r == kResNormal) return;  // fish still hooked, strike again
-      if (r == kResLand) LandFish(b);
-      ClearBite();
-      ambientMs_ = -1;  // recreate "Ambient" with a fresh random period
+      StartFight();
       return;
     }
     if (!lineOut_ || !ActiveLure() || !AtHole()) return;
-    if (!rateGate_.Allow(nowMs_)) {
-      rateWarn = rateGate_.warn;
-      return;
+    uint32_t gap = nowMs_ - lastReqMs_;
+    lastReqMs_ = nowMs_;
+    bool ok = rateWin_.Allow((int)gap);
+    rateWarn = !ok && gap > 1000;  // "Bite too often!" log condition
+    if (!ok) return;
+    BiteAttempt(true);
+  }
+
+  // 00479700 bite attempt (public: bot hooks). action = the strike/jig
+  // request path (record-driven thresholds on its weight grams); !action
+  // = the Ambient timer path (rec == 0, 50 % roll first, then the record
+  // build — the 004ba5e0 candidate pick happens on success).
+  bool BiteAttempt(bool action) {
+    if (!hasLake_ || biteActive_ || fightActive_) return false;
+    if (!lineOut_ || !ActiveLure() || !AtHole()) return false;
+    if (!action) {
+      ctrl::MsvcRand cr(1);
+      cr.s = rng_.s;
+      bool pass = ctrl::BiteRoll(cr, false, 0);  // rec == 0: 50 %
+      rng_.s = cr.s;
+      if (!pass) return false;
     }
-    StartBite(true);
+    bite::Record &rec = ring_.Push(rng_, kLineM[lineBucket_]);
+    if (!BuildBite(rec)) return false;
+    if (action) {
+      ctrl::MsvcRand cr(1);
+      cr.s = rng_.s;
+      bool pass = ctrl::BiteRoll(cr, true, rec.V());  // thresholds on grams
+      rng_.s = cr.s;
+      if (!pass) return false;
+    }
+    biteActive_ = true;
+    justBite = true;
+    ambientMs_ = -1;  // 00479700 kills "Ambient" on success
+    return true;
+  }
+
+  // 00473320/00473280 landed/catch processing: weight tally, bait
+  // consume, per-hole counter. Release effect 470/670 + msg 0x1f stay
+  // unported (docs/sim-bite.md integration notes).
+  bool LandFish() {
+    const bite::Record *r = ActiveBite();
+    if (!r) return false;
+    lastKg = r->W;
+    totalKg += r->W;
+    catches++;
+    if (r->W > biggest) biggest = r->W;
+    ConsumeBait();  // 0058f7c0 bait usage
+    Hole *h = NearestOpenHole(x, y, kAtHoleDist);
+    if (h) h->landCount++;  // hole +0x18
+    justCaught = true;
+    ClearBite();
+    ambientMs_ = -1;
+    return true;
+  }
+
+  // Reel in (walk-away / dry lure): line up, stand pose.
+  void Reel() {
+    lineOut_ = false;
+    atHoleTarget_ = false;
+    modeChain_.holeOpen = false;
+    JumpMode(kModeAction);
+    ambientMs_ = -1;
+  }
+
+  // Mode edges (00477310 / 00477220 / 00477880) for hooks + the fight.
+  int BoreBegin() {
+    modeChain_.mode = mach_.Mode();
+    int m = modeChain_.BoreBegin();
+    JumpMode(m);
+    return m;
+  }
+  int BoreEnd(bool busy = false) {
+    modeChain_.mode = mach_.Mode();
+    int m = modeChain_.BoreEnd(busy);
+    JumpMode(m);
+    return m;
+  }
+  void LineStage() {
+    modeChain_.mode = ctrl::MLineStage;  // 00477880: mode -> 0x25
+    JumpMode(ctrl::MLineStage);
+  }
+
+  // ---- fight (0xd) ----
+  bool Fighting() const { return fightActive_; }
+  // The run as InitDrill built it (snapshotted on its init frame, after
+  // that frame's 200 ms tick — hence ticks is expect or expect-1). The
+  // live run clears its depth array on exit, the snapshot keeps it.
+  const ctrl::DrillRun &Fight() const { return fightRun_; }
+  ctrl::FightEnd LastFightEnd() const { return lastEnd_; }
+
+  // Hooked fish -> the 0xd drill run (kala_force). The run is fully timer
+  // driven (docs/sim-controller.md section 2); forceRise (strike held
+  // >= kForceRiseMs) restarts it forced at power*0.75.
+  void StartFight() {
+    const bite::Record *r = ActiveBite();
+    if (!r || fightActive_) return;
+    holeDepth_ = (int)DepthCm(x, y);  // +0x420 (cm via DEPTH_TABLE)
+    sess_ = ctrl::Session{};
+    sess_.inputSettled = true;  // 0048ff90: nothing pending
+    sess_.verdict = 0;          // +0x33c: land path
+    // +0x414 at entry: the lure drop (004abf20 bucket 2 ~ 0.9*d).
+    // ponytail: the +0x414 ease chain (state 7 ramp) unported; one rung
+    // below the hole bottom stands in.
+    sess_.depth = ctrl::BucketDepth(holeDepth_, 2);
+    sess_.target = sess_.depth + 0x14;  // +0x418 = +0x414 + 20
+    sess_.bucket = ctrl::Bucket(holeDepth_, sess_.target);  // 004ac620
+    sess_.holeDepth = holeDepth_;
+    sess_.fishW = r->W;          // record +0x10 double
+    sess_.fishType = r->type;    // record +8 (type-3 check)
+    sess_.pGood = r->catchP;     // working copy +0x310
+    sess_.pBad = r->failP;       // working copy +0x308
+    sess_.recWeight = r->V();    // 00590c10(record)
+    sess_.state = ctrl::SFightPrep;
+    sess_.pending = ctrl::SFightPrep;
+    LineStage();  // 00477880: mode -> 0x25 (NOSTO lift)
+    fightActive_ = true;
+    fightCaptured_ = false;
+    fightRun_ = ctrl::DrillRun{};
+    fightMs_ = 0;
+    fightHoldMs_ = 0;
+    forced_ = false;
   }
 
   // Per-slice update. dt in seconds, pre-sliced <= 1 s by tick::Slices
@@ -467,68 +505,154 @@ struct Game {
     if (edges & ((uint32_t)1 << 8)) Strike();       // Space strike/jig
     if (edges & ((uint32_t)1 << 4)) LineBucket(-1); // PgUp shallower
     if (edges & ((uint32_t)1 << 5)) LineBucket(+1); // PgDn deeper
-    // Walk order: click target beats held-direction keys (0047f530 feed).
-    if (walking_) {
-      WalkStepToTarget(ms);
-    } else {
-      double dx = (input::Down(k, 3) ? 1 : 0) - (input::Down(k, 2) ? 1 : 0);
-      double dy = (input::Down(k, 1) ? 1 : 0) - (input::Down(k, 0) ? 1 : 0);
-      if (dx != 0 || dy != 0) {
-        double l = std::sqrt(dx * dx + dy * dy);
-        Step(dx / l, dy / l, ms);
+    if (!fightActive_) {
+      // Walk order: click target beats held-direction keys (0047f530).
+      if (walking_) {
+        WalkStepToTarget(ms);
+      } else {
+        double dx = (input::Down(k, 3) ? 1 : 0) - (input::Down(k, 2) ? 1 : 0);
+        double dy = (input::Down(k, 1) ? 1 : 0) - (input::Down(k, 0) ? 1 : 0);
+        if (dx != 0 || dy != 0) {
+          double l = std::sqrt(dx * dx + dy * dy);
+          Step(dx / l, dy / l, ms);
+        }
       }
     }
-    AdvanceModes(ms);
-    FishingUpkeep(ms);
+    StepTimeline(ms);
+    AdvanceSim(ms);
+    fightStrikeHeld_ = input::Down(k, 8) && fightActive_;
+    StepFight(ms);
     // Cosmetic bobber cycle (angler::JigOffset; presentation only).
     if (input::Down(k, 8) && lineOut_)
       jigPhase += dt * 8;
     else
       jigPhase = std::max(0.f, jigPhase - dt * 4);
     if (newMechanics) WanderDots(ms);
+    bool em = RoundEndMode();
+    endModeEdge_ = em && !prevEndMode_;
+    prevEndMode_ = em;
   }
 
   // Non-original test hook: guaranteed-catch bite record now (delta 19).
   void ForceBite() {
     if (!hasLake_ || !AtHole() || biteActive_) return;
-    Bite rec;
-    if (!MakeBiteRecord(rec)) {  // synthetic record when cells are empty
-      rec.v = 1000;
-      rec.species =
-          SpeciesTableFor(2, DepthAt(x, y))[0];
+    bite::Record &rec = ring_.Push(rng_, kLineM[lineBucket_]);
+    if (!BuildBite(rec)) {
+      // Synthetic fallback record (type 2); ring state (seq/rolls) kept.
+      rec.type = 2;
+      rec.SetV(1000);
+      rec.idx = bite::SpeciesTable(rec.type, rec.V())[0];
+      rec.species = (uint32_t)StockProvider().SpeciesId(rec.idx);
+      rec.W = bite::Weight(rec.V(), kLineM[lineBucket_]);
+      rec.timing = bite::Timing32(rec.V());
     }
     rec.catchP = 1;
     rec.failP = 0;
-    rec.timing32 = Timing32(rec.v);
-    PushBite(rec);
+    biteActive_ = true;
+    justBite = true;
+    ambientMs_ = -1;
   }
+
+  // ---- bot hook reads (botai::Hooks) ----
+  const bite::Record *ActiveBite() const {
+    return biteActive_ ? ring_.Find(ring_.rec[ring_.idx].seq) : nullptr;
+  }
+  int BiteCount() const { return (int)ring_.counter; }
 
  private:
   ves::Grid depth_;
   bool hasLake_ = false;
-  MsvcRand rng_;
-  RateGate rateGate_;
-  int mode_ = kModeAction;
+  MsvcRand rng_;  // the one stream (bite::Rng)
+  bite::RateWindow rateWin_{16};
+  uint32_t lastReqMs_ = 0;
+  fishstock::Stock stock_;          // DATA1 populations
+  bite::SyntheticStock synth_;      // documented stand-in (no lake file)
+  bool useSynth_ = true;
+  walkgrid::GridView walk_;         // corner bytes (004af230), optional
+  timeline::Machine mach_;          // move/mode machine (00467210 clock)
+  timeline::Chain chain_;           // drill chain (00480820, +0x450/+0x470)
+  timeline::ChainInput chainIn_;
+  ctrl::ModeChain modeChain_;       // 004764b0/00477310/00477220 edges
+  ctrl::Session sess_;              // 0xd fight state machine (0048af00)
+  ctrl::DrillRun fightRun_;         // snapshot of the run InitDrill built
+  bool fightCaptured_ = false;
+  bool fightActive_ = false, fightStrikeHeld_ = false, forced_ = false;
+  double fightMs_ = 0, fightHoldMs_ = 0;
+  ctrl::FightEnd lastEnd_ = ctrl::FightEnd::Normal;
+  bool endModeEdge_ = false, prevEndMode_ = false;
   uint32_t prevBits_ = 0, nowMs_ = 0;
   double heading_ = 0;         // +0x520, degrees
   double dirX_ = 0, dirY_ = 1; // +0x508/+0x510 velocity dir
   bool walking_ = false, arrived_ = true, atHoleTarget_ = false;
   double walkX_ = 0, walkY_ = 0;
-  double drillX_ = 0, drillY_ = 0, drillMsLeft_ = 0, boreMsLeft_ = 0;
+  double drillX_ = 0, drillY_ = 0;
+  bool holePending_ = false;
+  int holeDepth_ = 0;  // +0x420
   bool lineOut_ = false;
   int activeType_ = 0, activeLure_ = 0;
   int lineBucket_ = 0;
   double ambientMs_ = -1;  // "Ambient" timer, -1 = not armed (+0x638)
-  static constexpr int kRingSize = 64;  // bite ring at session+0x738
-  Bite ring_[kRingSize];
-  int ringNext_ = -1, activeSlot_ = -1;
-  uint32_t biteSeq_ = 0;
+  bite::Ring ring_;        // 64 x 0x70 bite ring (session+0x738)
   bool biteActive_ = false;
+  uint32_t activeHoleId_ = 0;  // session current hole id (+0x4c0)
+  uint32_t seed_ = 0;
+
+  // ctrl:: keeps a copy of the MSVC LCG (same generator); one stream is
+  // shared by syncing the state word at the boundary.
+  ctrl::MsvcRand CtrlRng() {
+    ctrl::MsvcRand r(1);
+    r.s = rng_.s;
+    return r;
+  }
+  void SyncRng(ctrl::MsvcRand &r) { rng_.s = r.s; }
+
+  // 00464410 jump + apply now (a bare Jump leaves cur = -1 until the next
+  // clock tick, which would make Mode() read stale inside the same call).
+  void JumpMode(int m) {
+    mach_.Jump(m);
+    mach_.Update(0);
+  }
+
+  void BuildStock(const std::string &lakePath, const std::string &speciesPath) {
+    stock_ = fishstock::Stock{};
+    bool ok = false;
+    if (!lakePath.empty() && hasLake_) {
+      ok = stock_.LoadLake(lakePath);
+      if (ok) {
+        stock_.LoadSpecies(speciesPath.empty()
+                               ? std::string("extracted/data/nyky/data0.dat")
+                               : speciesPath);
+        stock_.SetSeed(seed_);
+        stock_.SetDepth([this](int px, int py) {
+          return (int)DepthAt((double)px, (double)py);
+        });
+        stock_.Place((int)GridW(), (int)GridH());
+      }
+    }
+    synth_ = bite::SyntheticStock((int)GridW(), (int)GridH());
+    useSynth_ = !ok || stock_.fish.empty();  // empty DATA1 -> stand-in
+  }
+  const bite::Stock &StockProvider() const {
+    return useSynth_ ? (const bite::Stock &)synth_ : (const bite::Stock &)stock_;
+  }
 
   void ClearTimers() {
-    mode_ = kModeAction;
+    mach_ = timeline::Machine(timeline::HumanScript());
+    mach_.Queue(kModeAction);
+    mach_.Update(0);  // mode 5 immediately (PAIKALLAAN)
+    chain_ = timeline::Chain{};
+    chainIn_ = timeline::ChainInput{};
+    modeChain_ = ctrl::ModeChain{};
+    sess_ = ctrl::Session{};
+    fightRun_ = ctrl::DrillRun{};
+    fightCaptured_ = false;
+    fightActive_ = false;
+    fightStrikeHeld_ = forced_ = false;
+    fightMs_ = fightHoldMs_ = 0;
+    endModeEdge_ = prevEndMode_ = false;
     prevBits_ = 0;
     nowMs_ = 0;
+    lastReqMs_ = 0;
     heading_ = 0;
     dirX_ = 0;
     dirY_ = 1;
@@ -536,15 +660,15 @@ struct Game {
     arrived_ = true;
     atHoleTarget_ = false;
     walkX_ = walkY_ = 0;
-    drillMsLeft_ = boreMsLeft_ = 0;
+    drillX_ = drillY_ = 0;
+    holePending_ = false;
+    holeDepth_ = 0;
     lineOut_ = false;
     activeType_ = activeLure_ = 0;
     ambientMs_ = -1;
-    ringNext_ = activeSlot_ = -1;
-    biteSeq_ = 0;
+    ring_ = bite::Ring{};
     biteActive_ = false;
-    rateGate_ = RateGate{};
-    activity = 0;
+    rateWin_ = bite::RateWindow{16};
     rateWarn = false;
   }
 
@@ -560,10 +684,11 @@ struct Game {
     heading_ = std::atan2(tx - x, ty - y) * 180.0 / kPi;
   }
 
-  // 004770a0 walk step: s = ms * K (0.34; 0.725 in at-hole states).
+  // 004770a0 walk step: s = ms * K (0.34; 0.725 in run modes).
   void Step(double dirx, double diry, double ms) {
-    bool atHoleMode = mode_ == kModeAtHoleA || mode_ == kModeAtHoleB;
-    double s = ms * (atHoleMode ? kWalkKFast : kWalkK);
+    int m = mach_.Mode();
+    bool fast = m == kModeRunA || m == kModeRunB;
+    double s = ms * (fast ? kWalkKFast : kWalkK);
     double nx = x + dirx * s, ny = y + diry * s;
     if (nx < 0) nx = 0;  // clamp >= 0 per axis
     if (ny < 0) ny = 0;
@@ -603,54 +728,59 @@ struct Game {
     }
   }
 
-  // 00480820-driven mode chain: drill 6 -> hole 0x13 -> bore 0x18 ->
-  // bore end 0x27 -> line stage 0x25 -> at-hole pose 0x1e.
-  void AdvanceModes(double ms) {
-    if (mode_ == kModeDrill) {
-      drillMsLeft_ -= ms;
-      if (drillMsLeft_ <= 0) {
-        mode_ = kModeHole;  // 0x13 hole creation pass
-        CreateHole(drillX_, drillY_);
-        boreMsLeft_ = kBoreMs;
-        mode_ = kModeBore;  // 0x18 (00477310)
-      }
-    } else if (mode_ == kModeBore) {
-      boreMsLeft_ -= ms;
-      if (boreMsLeft_ <= 0) mode_ = kModeBoreEnd;  // 0x27 (00477220)
+  // Move/mode clock (00467210) + drill chain (00480820). Chunked at
+  // 100 ms so short passes (0x13 hole creation, 450 ms) are never hopped
+  // over inside one big slice.
+  void StepTimeline(double ms) {
+    int total = (int)ms;
+    if (total <= 0) {
+      mach_.Update(0);
+      return;
     }
-    if ((mode_ == kModeBoreEnd || mode_ == kModeAction) && !lineOut_) {
-      // 00477880 line stage: needs a reachable open hole + active lure
-      // (00488060 gates line-out on the lure).
+    for (int rem = total; rem > 0;) {
+      int s = std::min(rem, 100);
+      mach_.Update(s);
+      rem -= s;
+      int mode = mach_.Mode();
+      if (mode >= 9 && mode <= 0x11) {
+        int next = chain_.Step(mode, (int)nowMs_, timeline::HoldMs(drillSkill),
+                               chainIn_);
+        if (next != -1) mach_.Queue(next);
+      }
+      if (mode == kModeHole && holePending_) {  // 00480820 hole pass
+        CreateHole(drillX_, drillY_);
+        modeChain_.HolePass();
+        holePending_ = false;
+      }
+    }
+  }
+
+  void AdvanceSim(double ms) {
+    // Line drop: sitting at the hole (0x18) — or standing at one — with a
+    // lure (00488060 gates line-out on the lure).
+    if (!lineOut_ && !fightActive_ &&
+        (mach_.Mode() == kModeSit || mach_.Mode() == kModeAction)) {
       Hole *h = NearestOpenHole(x, y, kAtHoleDist);
       if (h && ActiveLure()) {
         activeHoleId_ = h->id;
         lineOut_ = true;
-        mode_ = kModeLineStage;  // 0x25
-      } else if (mode_ == kModeBoreEnd && !ActiveLure()) {
-        // ponytail: 00488060 sends mode 1 (free-walk pose) without a
-        // lure; port returns to mode 5 so a restock can resume drilling.
-        mode_ = kModeAction;
+        modeChain_.holeOpen = true;
       }
-    } else if (mode_ == kModeLineStage) {
-      mode_ = kModeAtHoleA;  // 0x1e at-hole pose
     }
-  }
-
-  void FishingUpkeep(double ms) {
     if (lineOut_) {
       Hole *h = NearestOpenHole(x, y, kAtHoleDist);
-      if (!h || !ActiveLure())
-        ReelIn();  // walked away / bait dry -> line in, mode 5
-      else
+      if (!h || !ActiveLure()) {
+        if (!fightActive_) Reel();  // walked away / bait dry -> line in
+      } else {
         activeHoleId_ = h->id;
+      }
     }
-    if (lineOut_ && ActiveLure() && !biteActive_) {
+    if (lineOut_ && ActiveLure() && !biteActive_ && !fightActive_) {
       if (ambientMs_ < 0)  // +0x640 && +0x638 == -1: create "Ambient"
         ambientMs_ = (double)(rng_.RandMax(75000) + 20000);  // 20..95 s
       ambientMs_ -= ms;
       if (ambientMs_ <= 0) {
-        if (rng_.RandMax(1000) >= 500) StartBite(false);  // 50% roll
-        if (biteActive_)
+        if (BiteAttempt(false))
           ambientMs_ = -1;  // timer killed on success
         else
           ambientMs_ = (double)(rng_.RandMax(75000) + 20000);
@@ -658,11 +788,57 @@ struct Game {
     }
   }
 
-  void ReelIn() {
-    lineOut_ = false;
-    atHoleTarget_ = false;
-    mode_ = kModeAction;
-    ambientMs_ = -1;
+  // The 0xd fight step (docs/sim-controller.md section 2). Session timers
+  // tick in 200 ms quanta so any Update slice resolves on time.
+  void StepFight(double ms) {
+    if (!fightActive_) return;
+    fightMs_ += ms;
+    unsigned bits = 0;
+    if (fightStrikeHeld_) {
+      fightHoldMs_ += ms;
+      if (fightHoldMs_ >= (double)kForceRiseMs && !forced_) {
+        bits |= ctrl::AHoldLong;  // 0x800: forceRise fired
+        forced_ = true;
+      }
+    }
+    for (int rem = (int)ms; rem > 0;) {
+      int step = std::min(rem, 200);
+      bool was = sess_.state == ctrl::SFight || sess_.state == ctrl::SFightPrep;
+      ctrl::MsvcRand cr = CtrlRng();
+      sess_.Step(bits, step, cr);
+      SyncRng(cr);
+      bits = 0;
+      rem -= step;
+      if (!fightCaptured_ && sess_.fight.count > 0) {
+        fightRun_ = sess_.fight;  // init frame done: pristine run
+        fightCaptured_ = true;
+      }
+      bool now = sess_.state == ctrl::SFight || sess_.state == ctrl::SFightPrep;
+      if (was && !now) {
+        FinishFight();
+        return;
+      }
+    }
+    // ponytail: hard cap; the Stall loop (step timer mid-segment) is
+    // bounded by stepMs in practice — raise only if a run ever hangs.
+    if (fightMs_ > 600000.0) FinishFight();
+  }
+
+  // 0xd exit mapping: 0xe landed / 0x10 retract-after-catch both land the
+  // fish (00473320/00473280); anything else is the 004732d0 escape.
+  void FinishFight() {
+    if (!fightActive_) return;
+    fightActive_ = false;
+    if (sess_.state == ctrl::SLanded || sess_.state == ctrl::SRetractCatch) {
+      lastEnd_ = sess_.state == ctrl::SRetractCatch ? ctrl::FightEnd::Catch
+                                                    : ctrl::FightEnd::Normal;
+      LandFish();
+    } else {
+      lastEnd_ = ctrl::FightEnd::Escape;
+      ClearBite();
+      ambientMs_ = -1;
+    }
+    BoreBegin();  // 00477310 from 0x25 -> 0x18 (sit/fish again)
   }
 
   void CreateHole(double wx, double wy) {
@@ -682,95 +858,25 @@ struct Game {
     return (int)(wy / kCell) * depth_.w + (int)(wx / kCell);
   }
 
-  // 004a9490 seed -> 9-step candidate walk over depth cells (delta 7).
-  // ponytail: docs/sim.md records the seed advance as "seed = cy"; taken
-  // literally that wraps negative cells to uint and degenerates to
-  // out-of-bounds cells only, so the cell index is rebuilt (cy*w+cx).
-  // Re-verify against a captured run (delta 20 open).
-  bool MakeBiteRecord(Bite &rec) {
+  // 004ba5e0 record build over the stock (candidate walk, selection
+  // shuffle, field formulas, fallback synth) — see bite::BuildRecord.
+  bool BuildBite(bite::Record &rec) {
     if (!hasLake_) return false;
-    static const int kDx[9] = {-1, 0, 1, 1, 1, 1, -1, 0, 1};
-    static const int kDy[9] = {-1, -1, -1, 0, -1, 0, 1, 1, 1};
-    int w = depth_.w, h = depth_.h;
-    int seed = CellIdx(x, y);
-    for (int i = 0; i < 9; i++) {
-      int cx = kDx[i] + seed % w;
-      int cy = kDy[i] + seed / w;
-      seed = cy * w + cx;
-      if (cx < 0 || cy < 0 || cx >= w || cy >= h) continue;
-      int n = CellCount(cx, cy);
-      if (n <= 0) continue;
-      rec.v = CellWeight(cx, cy, rng_.RandMax(n));  // rand(count) pick
-      break;
-    }
-    if (rec.v <= 0) {
-      // No-candidate fallback: depth gates + rare roll synthesizes a
-      // type-2 fish (0049de50 distribution unported -> 1% stand-in).
-      double d = DepthAt(x, y);
-      if (d < 81 || d > 251) return false;
-      if (rng_.RandMax(1000) >= 10) return false;
-      rec.v = 100 + rng_.RandMax(3500);
-    }
-    double depth = DepthAt(x, y);
-    CatchBand(depth, rec.catchP, rec.failP);
-    rec.timing32 = Timing32(rec.v);
-    rec.species = SpeciesTableFor(2, depth)[rng_.RandMax(8)];
-    rec.lineBucket = lineBucket_;
-    return rec.v > 0;
-  }
-
-  // Per-cell fish populations (lake+0x240c4 lists). Real populations come
-  // from the lake file (unported, open); synthesised deterministically
-  // per cell so bite selection is reproducible.
-  static uint32_t CellHash(int cx, int cy) {
-    uint32_t h = (uint32_t)cx * 374761393u + (uint32_t)cy * 668265263u + 1u;
-    h ^= h >> 13;
-    h *= 1274126177u;
-    return h ^ (h >> 16);
-  }
-  static int CellCount(int cx, int cy) {
-    return (int)(CellHash(cx, cy) >> 5) % 4;  // 0..3 fish per cell
-  }
-  int CellWeight(int cx, int cy, int i) {  // grams
-    MsvcRand r;
-    r.Seed(CellHash(cx, cy) ^ (uint32_t)(i * 0x9e3779b9 + 1));
-    return 100 + r.RandMax(3500);
-  }
-
-  void PushBite(const Bite &rec) {
-    ringNext_ = (ringNext_ + 1) % kRingSize;  // 64-slot ring +0x738
-    ring_[ringNext_] = rec;
-    activeSlot_ = ringNext_;
-    biteActive_ = true;
-    justBite = true;
-    ambientMs_ = -1;
-  }
-
-  // 00479700 bite attempt: roll vs threshold (50% ambient, activity
-  // thresholds for actions), then candidate search (004ba5e0 shape).
-  bool StartBite(bool action) {
-    int thr = action ? BiteThreshold(activity) : 500;
-    if (thr >= 0 && rng_.RandMax(1000) < thr) return false;
-    Bite rec;
-    if (!MakeBiteRecord(rec)) return false;
-    rec.seq = ++biteSeq_;
-    PushBite(rec);
-    return true;
-  }
-
-  // 00473320 landed fish: weight via line bucket, bait consumed, per-hole
-  // counter, tally. Release-effect threshold is v >= 470 g (type 3: 670);
-  // the swim-away spawn 004a0780 is render-only and unported (open).
-  void LandFish(const Bite &b) {
-    double w = WeightG(b.v, b.lineBucket);  // min(v*k_line, cap_line)
-    lastKg = w;
-    totalKg += w;
-    catches++;
-    if (w > biggest) biggest = w;
-    ConsumeBait();  // 0058f7c0 bait usage
-    Hole *h = NearestOpenHole(x, y, kAtHoleDist);
-    if (h) h->landCount++;  // hole +0x18
-    justCaught = true;
+    const bite::Stock &st = StockProvider();
+    bite::Context ctx;
+    ctx.x = (int)x;
+    ctx.y = (int)y;
+    int d = st.DepthAt(ctx.x, ctx.y);
+    // Lure at ~0.9 of the hole depth: the fallback synth's depth gates
+    // compare z against d*0.35/0.75 (same 004a5700 units).
+    ctx.z = (int)((double)d * 0.9);
+    ctx.state8 = -1;               // +8: normal line rule
+    ctx.line = kLineM[lineBucket_];
+    ctx.f58 = 0;
+    ctx.f60 = 1;  // fallback gates open (004ba5e0 no-candidate path)
+    ctx.f68 = 0;
+    ctx.flag80 = 0;
+    return bite::BuildRecord(ctx, st, rng_, rec);
   }
 
   void ConsumeBait() {  // 0058f7c0: consume, then advance a dry slot
@@ -781,7 +887,6 @@ struct Game {
 
   void ClearBite() {
     biteActive_ = false;
-    activeSlot_ = -1;
   }
 
   // 004af040 nearest open hole within radius r (linear scan; the original
@@ -829,8 +934,6 @@ struct Game {
         f.y += (Randf() - 0.5f) * (float)(kCell * ms / 150.0);
       }
   }
-
-  uint32_t activeHoleId_ = 0;  // session current hole id (+0x4c0)
 };
 
 }  // namespace game
