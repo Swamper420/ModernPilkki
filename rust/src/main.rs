@@ -1,6 +1,8 @@
 // ModernPilkki — SDL window skeleton. Parity target: Propilkki 2 v2.0.7.
 #[allow(dead_code)] // parity module; exercised by tests until gameplay uses it
 mod msvc_rand;
+#[allow(dead_code)] // parity module; exercised by tests until gameplay uses it
+mod ves;
 
 use sdl2::pixels::Color;
 use sdl2::sys::{SDL_Event, SDL_EventType, SDL_KeyCode, SDL_PollEvent};
